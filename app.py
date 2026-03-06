@@ -26,9 +26,15 @@ def init_db():
         last_scrobble_at TIMESTAMP NULL,
         last_check_at TIMESTAMP NULL,
         idle_minutes INTEGER DEFAULT 0,
+        last_alert_at TIMESTAMP NULL,
         active BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+    """)
+
+    cur.execute("""
+    ALTER TABLE teams
+    ADD COLUMN IF NOT EXISTS last_alert_at TIMESTAMP NULL;
     """)
 
     conn.commit()
