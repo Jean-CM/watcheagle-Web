@@ -228,20 +228,32 @@ def seed_team():
     })
 
 
-@app.route("/update-team")
-def update_team():
-    init_db()
-
+@app.route("/delete-team")
+def delete_team():
     team_id = request.args.get("id")
-    name = request.args.get("name")
-    app_name = request.args.get("app")
-    lastfm_user = request.args.get("user")
 
-    if not team_id or not name or not app_name or not lastfm_user:
-        return jsonify({
-            "ok": False,
-            "error": "Faltan parámetros. Usa ?id=1&name=Equipo%2001&app=spotify&user=JeanCMP"
-        }), 400
+    if not team_id:
+        return jsonify({"ok": False, "error": "Falta id"}), 400
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        DELETE FROM teams
+        WHERE id = %s
+        RETURNING id;
+    """, (team_id,))
+
+    row = cur.fetchone()
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    if row:
+        return jsonify({"ok": True, "deleted_id": row["id"]})
+
+    return jsonify({"ok": False, "error": "Equipo no encontrado"}), 404
 
     conn = get_conn()
     cur = conn.cursor()
