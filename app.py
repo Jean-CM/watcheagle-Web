@@ -78,7 +78,7 @@ def home():
     html = f"""
     <html>
     <head>
-        <title>Last.fm Watchdog</title>
+        <title>WatchEagle</title>
         <style>
             body {{
                 font-family: Arial, sans-serif;
@@ -136,11 +136,12 @@ def home():
         </style>
     </head>
     <body>
-        <h1>Last.fm Watchdog</h1>
+        <h1>WatchEagle</h1>
         <div class="card">
             <p><strong>Estado:</strong> Dashboard activo</p>
             <p><strong>Monitores activos:</strong> {len(teams)}</p>
-            <p class="hint">Carga equipos con: <code>/seed-team?name=equipo01&app=spotify&user=JeanCMP</code></p>
+            <p class="hint">Carga equipos con: <code>/seed-team?name=Equipo%2001&app=spotify&user=equipoC01</code></p>
+            <p class="hint">Actualiza equipos con: <code>/update-team?id=1&name=Equipo%2001&app=spotify&user=equipoC01</code></p>
         </div>
 
         <table>
@@ -182,7 +183,7 @@ def seed_team():
     if not name or not app_name or not lastfm_user:
         return jsonify({
             "ok": False,
-            "error": "Faltan parámetros. Usa ?name=equipo01&app=spotify&user=JeanCMP"
+            "error": "Faltan parámetros. Usa ?name=Equipo%2001&app=spotify&user=equipoC01"
         }), 400
 
     conn = get_conn()
@@ -208,6 +209,44 @@ def seed_team():
         "ok": True,
         "message": "Ese usuario ya existía, no se duplicó."
     })
+
+
+@app.route("/update-team")
+def update_team():
+    init_db()
+
+    team_id = request.args.get("id")
+    name = request.args.get("name")
+    app_name = request.args.get("app")
+    lastfm_user = request.args.get("user")
+
+    if not team_id or not name or not app_name or not lastfm_user:
+        return jsonify({
+            "ok": False,
+            "error": "Faltan parámetros. Usa ?id=1&name=Equipo%2001&app=spotify&user=equipoC01"
+        }), 400
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE teams
+        SET name = %s,
+            app_name = %s,
+            lastfm_user = %s
+        WHERE id = %s
+        RETURNING id, name, app_name, lastfm_user, status;
+    """, (name, app_name, lastfm_user, team_id))
+
+    row = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    if row:
+        return jsonify({"ok": True, "updated": row})
+
+    return jsonify({"ok": False, "error": "No se encontró el equipo"}), 404
 
 
 if __name__ == "__main__":
