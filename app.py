@@ -256,7 +256,12 @@ def update_team():
 
     return jsonify({"ok": False, "error": "No se encontró el equipo"}), 404
 
-
+@app.route("/run-check")
+def run_check():
+    import subprocess
+    result = subprocess.run(["python", "watch_scrobbles.py"], capture_output=True, text=True)
+    return f"<pre>{result.stdout}\n{result.stderr}</pre>"
+    
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
