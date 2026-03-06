@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
+import subprocess
+import requests
 
 app = Flask(__name__)
 
@@ -140,6 +142,10 @@ def home():
                 padding: 2px 6px;
                 border-radius: 6px;
             }}
+            a {{
+                color: #93c5fd;
+                text-decoration: none;
+            }}
         </style>
     </head>
     <body>
@@ -147,8 +153,11 @@ def home():
         <div class="card">
             <p><strong>Estado:</strong> Dashboard activo</p>
             <p><strong>Monitores activos:</strong> {len(teams)}</p>
-            <p class="hint">Carga equipos con: <code>/seed-team?name=Equipo%2001&app=spotify&user=equipoC01</code></p>
-            <p class="hint">Actualiza equipos con: <code>/update-team?id=1&name=Equipo%2001&app=spotify&user=equipoC01</code></p>
+            <p class="hint">Cargar ejemplo: <code>/seed-team?name=Equipo%2001&app=spotify&user=JeanCMP</code></p>
+            <p class="hint">Actualizar ejemplo: <code>/update-team?id=1&name=Equipo%2001&app=spotify&user=JeanCMP</code></p>
+            <p class="hint"><a href="/run-check">Ejecutar chequeo manual</a></p>
+            <p class="hint"><a href="/debug-lastfm?user=JeanCMP">Debug Last.fm</a></p>
+            <p class="hint"><a href="/health">Health</a></p>
         </div>
 
         <table>
@@ -158,14 +167,14 @@ def home():
                     <th>Equipo</th>
                     <th>App</th>
                     <th>Usuario Last.fm</th>
-                   <th>Estado</th>
+                    <th>Estado</th>
                     <th>Último scrobble</th>
                     <th>Idle (min)</th>
                     <th>Último check</th>
                 </tr>
             </thead>
             <tbody>
-                {rows if rows else '<tr><td colspan="7">No hay equipos cargados todavía.</td></tr>'}
+                {rows if rows else '<tr><td colspan="8">No hay equipos cargados todavía.</td></tr>'}
             </tbody>
         </table>
     </body>
@@ -191,7 +200,7 @@ def seed_team():
     if not name or not app_name or not lastfm_user:
         return jsonify({
             "ok": False,
-            "error": "Faltan parámetros. Usa ?name=Equipo%2001&app=spotify&user=equipoC01"
+            "error": "Faltan parámetros. Usa ?name=Equipo%2001&app=spotify&user=JeanCMP"
         }), 400
 
     conn = get_conn()
@@ -231,7 +240,7 @@ def update_team():
     if not team_id or not name or not app_name or not lastfm_user:
         return jsonify({
             "ok": False,
-            "error": "Faltan parámetros. Usa ?id=1&name=Equipo%2001&app=spotify&user=equipoC01"
+            "error": "Faltan parámetros. Usa ?id=1&name=Equipo%2001&app=spotify&user=JeanCMP"
         }), 400
 
     conn = get_conn()
@@ -256,12 +265,41 @@ def update_team():
 
     return jsonify({"ok": False, "error": "No se encontró el equipo"}), 404
 
+
+@app.route("/debug-lastfm")
+def debug_lastfm():
+    user = request.args.get("user", "JeanCMP")
+
+    url = "https://ws.audioscrobbler.com/2.0/"
+    params = {
+        "method": "user.getrecenttracks",
+        "user": user,
+        "api_key": os.environ.get("LASTFM_API_KEY"),
+        "format": "json",
+        "limit": 1
+    }
+
+    r = requests.get(url, params=params, timeout=30)
+
+    return f"""
+    <pre>
+HTTP: {r.status_code}
+
+URL:
+{r.url}
+
+BODY:
+{r.text}
+    </pre>
+    """
+
+
 @app.route("/run-check")
 def run_check():
-    import subprocess
     result = subprocess.run(["python", "watch_scrobbles.py"], capture_output=True, text=True)
     return f"<pre>{result.stdout}\n{result.stderr}</pre>"
-    
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
