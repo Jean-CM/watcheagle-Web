@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, request, jsonify
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -54,13 +54,22 @@ def home():
 
     rows = ""
     for t in teams:
+        estado = t["status"] or "PENDING"
+        estado_class = ""
+        if estado == "OK":
+            estado_class = "ok"
+        elif estado == "WARN":
+            estado_class = "warn"
+        elif estado == "INCIDENT":
+            estado_class = "incident"
+
         rows += f"""
         <tr>
             <td>{t['id']}</td>
             <td>{t['name']}</td>
             <td>{t['app_name']}</td>
             <td>{t['lastfm_user']}</td>
-            <td>{t['status']}</td>
+            <td class="{estado_class}">{estado}</td>
             <td>{t['idle_minutes']}</td>
             <td>{t['last_check_at'] or '-'}</td>
         </tr>
@@ -73,7 +82,7 @@ def home():
         <style>
             body {{
                 font-family: Arial, sans-serif;
-                background: #0b1220;
+                background: #071226;
                 color: #e5e7eb;
                 margin: 0;
                 padding: 30px;
@@ -82,7 +91,7 @@ def home():
                 margin-bottom: 10px;
             }}
             .card {{
-                background: #111827;
+                background: #0f1b33;
                 padding: 20px;
                 border-radius: 12px;
                 margin-bottom: 20px;
@@ -90,7 +99,7 @@ def home():
             table {{
                 width: 100%;
                 border-collapse: collapse;
-                background: #111827;
+                background: #0f1b33;
                 border-radius: 12px;
                 overflow: hidden;
             }}
@@ -100,7 +109,7 @@ def home():
                 text-align: left;
             }}
             th {{
-                background: #1f2937;
+                background: #1a2740;
             }}
             .ok {{
                 color: #22c55e;
@@ -114,6 +123,16 @@ def home():
                 color: #ef4444;
                 font-weight: bold;
             }}
+            .hint {{
+                margin-top: 14px;
+                font-size: 14px;
+                color: #9ca3af;
+            }}
+            code {{
+                background: #111827;
+                padding: 2px 6px;
+                border-radius: 6px;
+            }}
         </style>
     </head>
     <body>
@@ -121,6 +140,7 @@ def home():
         <div class="card">
             <p><strong>Estado:</strong> Dashboard activo</p>
             <p><strong>Monitores activos:</strong> {len(teams)}</p>
+            <p class="hint">Carga equipos con: <code>/seed-team?name=equipo01&app=spotify&user=JeanCMP</code></p>
         </div>
 
         <table>
@@ -143,6 +163,51 @@ def home():
     </html>
     """
     return html
+
+
+@app.route("/health")
+def health():
+    init_db()
+    return jsonify({"ok": True, "service": "WatchEagle"})
+
+
+@app.route("/seed-team")
+def seed_team():
+    init_db()
+
+    name = request.args.get("name")
+    app_name = request.args.get("app")
+    lastfm_user = request.args.get("user")
+
+    if not name or not app_name or not lastfm_user:
+        return jsonify({
+            "ok": False,
+            "error": "Faltan parámetros. Usa ?name=equipo01&app=spotify&user=JeanCMP"
+        }), 400
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO teams (name, app_name, lastfm_user, status)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (lastfm_user)
+        DO NOTHING
+        RETURNING id, name, app_name, lastfm_user, status;
+    """, (name, app_name, lastfm_user, "PENDING"))
+
+    row = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    if row:
+        return jsonify({"ok": True, "created": row})
+
+    return jsonify({
+        "ok": True,
+        "message": "Ese usuario ya existía, no se duplicó."
+    })
 
 
 if __name__ == "__main__":
