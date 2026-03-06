@@ -49,7 +49,7 @@ def home():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
-        SELECT id, name, app_name, lastfm_user, status, idle_minutes, last_check_at
+        SELECT id, name, app_name, lastfm_user, status, idle_minutes, last_scrobble_at, last_check_at
         FROM teams
         WHERE active = TRUE
         ORDER BY id ASC;
@@ -76,6 +76,7 @@ def home():
             <td>{t['app_name']}</td>
             <td>{t['lastfm_user']}</td>
             <td class="{estado_class}">{estado}</td>
+            <td>{t['last_scrobble_at'] or '-'}</td>
             <td>{t['idle_minutes']}</td>
             <td>{t['last_check_at'] or '-'}</td>
         </tr>
@@ -157,7 +158,8 @@ def home():
                     <th>Equipo</th>
                     <th>App</th>
                     <th>Usuario Last.fm</th>
-                    <th>Estado</th>
+                   <th>Estado</th>
+                    <th>Último scrobble</th>
                     <th>Idle (min)</th>
                     <th>Último check</th>
                 </tr>
