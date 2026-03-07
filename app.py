@@ -310,7 +310,29 @@ BODY:
 def run_check():
     result = subprocess.run(["python", "watch_scrobbles.py"], capture_output=True, text=True)
     return f"<pre>{result.stdout}\n{result.stderr}</pre>"
+    
+def collect_scrobble(user, equipo, app):
 
+    url = f"https://ws.audioscrobbler.com/2.0/?method=user.getrecenttracks&user={user}&api_key={LASTFM_API_KEY}&format=json&limit=1"
+
+    r = requests.get(url)
+    data = r.json()
+
+    track = data["recenttracks"]["track"][0]
+
+    artist = track["artist"]["#text"]
+    song = track["name"]
+    album = track["album"]["#text"]
+
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO scrobbles(equipo,usuario,artista,cancion,album,timestamp,app)
+        VALUES (%s,%s,%s,%s,%s,NOW(),%s)
+    """,(equipo,user,artist,song,album,app))
+
+    conn.commit()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
