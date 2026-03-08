@@ -18,6 +18,7 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
+    # Tabla de equipos / monitoreo
     cur.execute("""
     CREATE TABLE IF NOT EXISTS teams (
         id SERIAL PRIMARY KEY,
@@ -37,6 +38,33 @@ def init_db():
     cur.execute("""
     ALTER TABLE teams
     ADD COLUMN IF NOT EXISTS last_alert_at TIMESTAMP NULL;
+    """)
+
+    # Tabla histórica de reproducciones
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS scrobbles (
+        id SERIAL PRIMARY KEY,
+        team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
+        team_name VARCHAR(50) NOT NULL,
+        lastfm_user VARCHAR(100) NOT NULL,
+        app_name VARCHAR(50) NOT NULL,
+        artist_name TEXT NOT NULL,
+        track_name TEXT NOT NULL,
+        album_name TEXT,
+        scrobble_time TIMESTAMP NOT NULL,
+        collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
+
+    # Índice para consultas rápidas y evitar dolor futuro
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_scrobbles_team_time
+    ON scrobbles(team_id, scrobble_time DESC);
+    """)
+
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_scrobbles_artist_time
+    ON scrobbles(artist_name, scrobble_time DESC);
     """)
 
     conn.commit()
@@ -158,6 +186,8 @@ def home():
             <p class="hint"><a href="/run-check">Ejecutar chequeo manual</a></p>
             <p class="hint"><a href="/debug-lastfm?user=JeanCMP">Debug Last.fm</a></p>
             <p class="hint"><a href="/health">Health</a></p>
+            <p class="hint"><a href="/init-scrobbles">Inicializar tabla scrobbles</a></p>
+            <p class="hint"><a href="/scrobbles-count">Ver total scrobbles guardados</a></p>
         </div>
 
         <table>
@@ -187,6 +217,24 @@ def home():
 def health():
     init_db()
     return jsonify({"ok": True, "service": "WatchEagle"})
+
+
+@app.route("/init-scrobbles")
+def init_scrobbles():
+    init_db()
+    return jsonify({"ok": True, "message": "Tabla scrobbles lista"})
+
+
+@app.route("/scrobbles-count")
+def scrobbles_count():
+    init_db()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) AS total FROM scrobbles;")
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return jsonify({"ok": True, "total_scrobbles": row["total"]})
 
 
 @app.route("/seed-team")
@@ -228,6 +276,44 @@ def seed_team():
     })
 
 
+@app.route("/update-team")
+def update_team():
+    init_db()
+
+    team_id = request.args.get("id")
+    name = request.args.get("name")
+    app_name = request.args.get("app")
+    lastfm_user = request.args.get("user")
+
+    if not team_id or not name or not app_name or not lastfm_user:
+        return jsonify({
+            "ok": False,
+            "error": "Faltan parámetros. Usa ?id=1&name=Equipo%2001&app=spotify&user=JeanCMP"
+        }), 400
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE teams
+        SET name = %s,
+            app_name = %s,
+            lastfm_user = %s
+        WHERE id = %s
+        RETURNING id, name, app_name, lastfm_user, status;
+    """, (name, app_name, lastfm_user, team_id))
+
+    row = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    if row:
+        return jsonify({"ok": True, "updated": row})
+
+    return jsonify({"ok": False, "error": "No se encontró el equipo"}), 404
+
+
 @app.route("/delete-team")
 def delete_team():
     team_id = request.args.get("id")
@@ -254,28 +340,6 @@ def delete_team():
         return jsonify({"ok": True, "deleted_id": row["id"]})
 
     return jsonify({"ok": False, "error": "Equipo no encontrado"}), 404
-
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        UPDATE teams
-        SET name = %s,
-            app_name = %s,
-            lastfm_user = %s
-        WHERE id = %s
-        RETURNING id, name, app_name, lastfm_user, status;
-    """, (name, app_name, lastfm_user, team_id))
-
-    row = cur.fetchone()
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    if row:
-        return jsonify({"ok": True, "updated": row})
-
-    return jsonify({"ok": False, "error": "No se encontró el equipo"}), 404
 
 
 @app.route("/debug-lastfm")
@@ -310,29 +374,7 @@ BODY:
 def run_check():
     result = subprocess.run(["python", "watch_scrobbles.py"], capture_output=True, text=True)
     return f"<pre>{result.stdout}\n{result.stderr}</pre>"
-    
-def collect_scrobble(user, equipo, app):
 
-    url = f"https://ws.audioscrobbler.com/2.0/?method=user.getrecenttracks&user={user}&api_key={LASTFM_API_KEY}&format=json&limit=1"
-
-    r = requests.get(url)
-    data = r.json()
-
-    track = data["recenttracks"]["track"][0]
-
-    artist = track["artist"]["#text"]
-    song = track["name"]
-    album = track["album"]["#text"]
-
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-
-    cur.execute("""
-        INSERT INTO scrobbles(equipo,usuario,artista,cancion,album,timestamp,app)
-        VALUES (%s,%s,%s,%s,%s,NOW(),%s)
-    """,(equipo,user,artist,song,album,app))
-
-    conn.commit()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
