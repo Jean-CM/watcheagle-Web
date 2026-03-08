@@ -18,7 +18,7 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # Tabla de equipos / monitoreo
+    # Tabla equipos
     cur.execute("""
     CREATE TABLE IF NOT EXISTS teams (
         id SERIAL PRIMARY KEY,
@@ -35,12 +35,7 @@ def init_db():
     );
     """)
 
-    cur.execute("""
-    ALTER TABLE teams
-    ADD COLUMN IF NOT EXISTS last_alert_at TIMESTAMP NULL;
-    """)
-
-    # Tabla histórica de reproducciones
+    # Tabla scrobbles
     cur.execute("""
     CREATE TABLE IF NOT EXISTS scrobbles (
         id SERIAL PRIMARY KEY,
@@ -56,15 +51,9 @@ def init_db():
     );
     """)
 
-    # Índice para consultas rápidas y evitar dolor futuro
     cur.execute("""
-    CREATE INDEX IF NOT EXISTS idx_scrobbles_team_time
-    ON scrobbles(team_id, scrobble_time DESC);
-    """)
-
-    cur.execute("""
-    CREATE INDEX IF NOT EXISTS idx_scrobbles_artist_time
-    ON scrobbles(artist_name, scrobble_time DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_scrobble_unique
+    ON scrobbles(team_id, track_name, artist_name, scrobble_time);
     """)
 
     conn.commit()
@@ -72,343 +61,336 @@ def init_db():
     conn.close()
 
 
+# ---------- DASHBOARD ----------
+
 @app.route("/")
 def home():
+
     init_db()
 
     conn = get_conn()
     cur = conn.cursor()
+
     cur.execute("""
         SELECT id, name, app_name, lastfm_user, status, idle_minutes, last_scrobble_at, last_check_at
         FROM teams
         WHERE active = TRUE
-        ORDER BY id ASC;
+        ORDER BY id ASC
     """)
+
     teams = cur.fetchall()
+
     cur.close()
     conn.close()
 
     rows = ""
+
     for t in teams:
+
         estado = t["status"] or "PENDING"
+
         estado_class = ""
+
         if estado == "OK":
             estado_class = "ok"
+
         elif estado == "WARN":
             estado_class = "warn"
+
         elif estado == "INCIDENT":
             estado_class = "incident"
 
         rows += f"""
         <tr>
-            <td>{t['id']}</td>
-            <td>{t['name']}</td>
-            <td>{t['app_name']}</td>
-            <td>{t['lastfm_user']}</td>
-            <td class="{estado_class}">{estado}</td>
-            <td>{t['last_scrobble_at'] or '-'}</td>
-            <td>{t['idle_minutes']}</td>
-            <td>{t['last_check_at'] or '-'}</td>
+        <td>{t['id']}</td>
+        <td>{t['name']}</td>
+        <td>{t['app_name']}</td>
+        <td>{t['lastfm_user']}</td>
+        <td class="{estado_class}">{estado}</td>
+        <td>{t['last_scrobble_at'] or '-'}</td>
+        <td>{t['idle_minutes']}</td>
+        <td>{t['last_check_at'] or '-'}</td>
         </tr>
         """
 
     html = f"""
     <html>
     <head>
-        <title>WatchEagle</title>
-        <style>
-            body {{
-                font-family: Arial, sans-serif;
-                background: #071226;
-                color: #e5e7eb;
-                margin: 0;
-                padding: 30px;
-            }}
-            h1 {{
-                margin-bottom: 10px;
-            }}
-            .card {{
-                background: #0f1b33;
-                padding: 20px;
-                border-radius: 12px;
-                margin-bottom: 20px;
-            }}
-            table {{
-                width: 100%;
-                border-collapse: collapse;
-                background: #0f1b33;
-                border-radius: 12px;
-                overflow: hidden;
-            }}
-            th, td {{
-                padding: 12px;
-                border-bottom: 1px solid #1f2937;
-                text-align: left;
-            }}
-            th {{
-                background: #1a2740;
-            }}
-            .ok {{
-                color: #22c55e;
-                font-weight: bold;
-            }}
-            .warn {{
-                color: #f59e0b;
-                font-weight: bold;
-            }}
-            .incident {{
-                color: #ef4444;
-                font-weight: bold;
-            }}
-            .hint {{
-                margin-top: 14px;
-                font-size: 14px;
-                color: #9ca3af;
-            }}
-            code {{
-                background: #111827;
-                padding: 2px 6px;
-                border-radius: 6px;
-            }}
-            a {{
-                color: #93c5fd;
-                text-decoration: none;
-            }}
-        </style>
-    </head>
-    <body>
-        <h1>WatchEagle</h1>
-        <div class="card">
-            <p><strong>Estado:</strong> Dashboard activo</p>
-            <p><strong>Monitores activos:</strong> {len(teams)}</p>
-            <p class="hint">Cargar ejemplo: <code>/seed-team?name=Equipo%2001&app=spotify&user=JeanCMP</code></p>
-            <p class="hint">Actualizar ejemplo: <code>/update-team?id=1&name=Equipo%2001&app=spotify&user=JeanCMP</code></p>
-            <p class="hint"><a href="/run-check">Ejecutar chequeo manual</a></p>
-            <p class="hint"><a href="/debug-lastfm?user=JeanCMP">Debug Last.fm</a></p>
-            <p class="hint"><a href="/health">Health</a></p>
-            <p class="hint"><a href="/init-scrobbles">Inicializar tabla scrobbles</a></p>
-            <p class="hint"><a href="/scrobbles-count">Ver total scrobbles guardados</a></p>
-        </div>
+    <title>WatchEagle</title>
 
-        <table>
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Equipo</th>
-                    <th>App</th>
-                    <th>Usuario Last.fm</th>
-                    <th>Estado</th>
-                    <th>Último scrobble</th>
-                    <th>Idle (min)</th>
-                    <th>Último check</th>
-                </tr>
-            </thead>
-            <tbody>
-                {rows if rows else '<tr><td colspan="8">No hay equipos cargados todavía.</td></tr>'}
-            </tbody>
-        </table>
+    <style>
+
+    body {{
+    font-family: Arial;
+    background:#071226;
+    color:white;
+    padding:30px;
+    }}
+
+    table {{
+    width:100%;
+    border-collapse:collapse;
+    }}
+
+    th,td {{
+    padding:10px;
+    border-bottom:1px solid #333;
+    }}
+
+    th {{
+    background:#1a2740;
+    }}
+
+    .ok {{color:#22c55e;font-weight:bold}}
+    .warn {{color:#f59e0b;font-weight:bold}}
+    .incident {{color:#ef4444;font-weight:bold}}
+
+    </style>
+    </head>
+
+    <body>
+
+    <h1>WatchEagle</h1>
+
+    <p>Monitores activos: {len(teams)}</p>
+
+    <p>
+    <a href="/run-check">run monitor</a> |
+    <a href="/collect-now">collect scrobbles</a> |
+    <a href="/scrobbles-count">scrobbles count</a> |
+    <a href="/scrobbles-latest">latest scrobbles</a> |
+    <a href="/top-artists-today">top artists</a> |
+    <a href="/artists-vs-yesterday">artists vs yesterday</a>
+    </p>
+
+    <table>
+
+    <thead>
+    <tr>
+    <th>ID</th>
+    <th>Equipo</th>
+    <th>App</th>
+    <th>User</th>
+    <th>Status</th>
+    <th>Last scrobble</th>
+    <th>Idle</th>
+    <th>Last check</th>
+    </tr>
+    </thead>
+
+    <tbody>
+    {rows}
+    </tbody>
+
+    </table>
+
     </body>
     </html>
     """
+
     return html
 
 
-@app.route("/health")
-def health():
-    init_db()
-    return jsonify({"ok": True, "service": "WatchEagle"})
-
-
-@app.route("/init-scrobbles")
-def init_scrobbles():
-    init_db()
-    return jsonify({"ok": True, "message": "Tabla scrobbles lista"})
-
-
-@app.route("/scrobbles-count")
-def scrobbles_count():
-    init_db()
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) AS total FROM scrobbles;")
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    return jsonify({"ok": True, "total_scrobbles": row["total"]})
-
+# ---------- SEED TEAM ----------
 
 @app.route("/seed-team")
 def seed_team():
-    init_db()
 
     name = request.args.get("name")
     app_name = request.args.get("app")
-    lastfm_user = request.args.get("user")
-
-    if not name or not app_name or not lastfm_user:
-        return jsonify({
-            "ok": False,
-            "error": "Faltan parámetros. Usa ?name=Equipo%2001&app=spotify&user=JeanCMP"
-        }), 400
+    user = request.args.get("user")
 
     conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT INTO teams (name, app_name, lastfm_user, status)
-        VALUES (%s, %s, %s, %s)
-        ON CONFLICT (lastfm_user)
-        DO NOTHING
-        RETURNING id, name, app_name, lastfm_user, status;
-    """, (name, app_name, lastfm_user, "PENDING"))
+    INSERT INTO teams(name,app_name,lastfm_user)
+    VALUES(%s,%s,%s)
+    ON CONFLICT DO NOTHING
+    RETURNING id
+    """,(name,app_name,user))
 
     row = cur.fetchone()
+
     conn.commit()
+
     cur.close()
     conn.close()
 
-    if row:
-        return jsonify({"ok": True, "created": row})
-
-    return jsonify({
-        "ok": True,
-        "message": "Ese usuario ya existía, no se duplicó."
-    })
+    return jsonify({"created":row})
 
 
-@app.route("/update-team")
-def update_team():
-    init_db()
-
-    team_id = request.args.get("id")
-    name = request.args.get("name")
-    app_name = request.args.get("app")
-    lastfm_user = request.args.get("user")
-
-    if not team_id or not name or not app_name or not lastfm_user:
-        return jsonify({
-            "ok": False,
-            "error": "Faltan parámetros. Usa ?id=1&name=Equipo%2001&app=spotify&user=JeanCMP"
-        }), 400
-
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        UPDATE teams
-        SET name = %s,
-            app_name = %s,
-            lastfm_user = %s
-        WHERE id = %s
-        RETURNING id, name, app_name, lastfm_user, status;
-    """, (name, app_name, lastfm_user, team_id))
-
-    row = cur.fetchone()
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    if row:
-        return jsonify({"ok": True, "updated": row})
-
-    return jsonify({"ok": False, "error": "No se encontró el equipo"}), 404
-
+# ---------- DELETE TEAM ----------
 
 @app.route("/delete-team")
 def delete_team():
-    team_id = request.args.get("id")
 
-    if not team_id:
-        return jsonify({"ok": False, "error": "Falta id"}), 400
+    id = request.args.get("id")
 
     conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
-        DELETE FROM teams
-        WHERE id = %s
-        RETURNING id;
-    """, (team_id,))
-
-    row = cur.fetchone()
+    DELETE FROM teams WHERE id=%s
+    """,(id,))
 
     conn.commit()
+
     cur.close()
     conn.close()
 
-    if row:
-        return jsonify({"ok": True, "deleted_id": row["id"]})
-
-    return jsonify({"ok": False, "error": "Equipo no encontrado"}), 404
+    return jsonify({"deleted":id})
 
 
-@app.route("/debug-lastfm")
-def debug_lastfm():
-    user = request.args.get("user", "JeanCMP")
+# ---------- COLLECT SCROBBLES ----------
 
-    url = "https://ws.audioscrobbler.com/2.0/"
-    params = {
-        "method": "user.getrecenttracks",
-        "user": user,
-        "api_key": os.environ.get("LASTFM_API_KEY"),
-        "format": "json",
-        "limit": 1
-    }
+@app.route("/collect-now")
+def collect_now():
 
-    r = requests.get(url, params=params, timeout=30)
+    result = subprocess.run(["python","collect_scrobbles.py"],capture_output=True,text=True)
 
-    return f"""
-    <pre>
-HTTP: {r.status_code}
+    return f"<pre>{result.stdout}</pre>"
 
-URL:
-{r.url}
 
-BODY:
-{r.text}
-    </pre>
-    """
-
+# ---------- MONITOR ----------
 
 @app.route("/run-check")
 def run_check():
-    result = subprocess.run(["python", "watch_scrobbles.py"], capture_output=True, text=True)
-    return f"<pre>{result.stdout}\n{result.stderr}</pre>"
 
-    
-@app.route("/collect-now")
-def collect_now():
-    result = subprocess.run(["python", "collect_scrobbles.py"], capture_output=True, text=True)
-    return f"<pre>{result.stdout}\n{result.stderr}</pre>"
+    result = subprocess.run(["python","watch_scrobbles.py"],capture_output=True,text=True)
+
+    return f"<pre>{result.stdout}</pre>"
+
+
+# ---------- COUNT ----------
+
+@app.route("/scrobbles-count")
+def scrobbles_count():
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("SELECT COUNT(*) AS total FROM scrobbles")
+
+    row = cur.fetchone()
+
+    cur.close()
+    conn.close()
+
+    return jsonify(row)
+
+
+# ---------- LATEST ----------
+
 @app.route("/scrobbles-latest")
 def scrobbles_latest():
-    init_db()
+
     conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT
-            id,
-            team_name,
-            lastfm_user,
-            app_name,
-            artist_name,
-            track_name,
-            album_name,
-            scrobble_time,
-            collected_at
-        FROM scrobbles
-        ORDER BY scrobble_time DESC
-        LIMIT 50;
+    SELECT team_name,artist_name,track_name,scrobble_time
+    FROM scrobbles
+    ORDER BY scrobble_time DESC
+    LIMIT 50
     """)
+
     rows = cur.fetchall()
 
     cur.close()
     conn.close()
 
-    return jsonify({"ok": True, "rows": rows})
-    
+    return jsonify(rows)
+
+
+# ---------- TOP ARTISTS ----------
+
+@app.route("/top-artists-today")
+def top_artists_today():
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT artist_name,COUNT(*) plays
+    FROM scrobbles
+    WHERE DATE(scrobble_time)=CURRENT_DATE
+    GROUP BY artist_name
+    ORDER BY plays DESC
+    LIMIT 20
+    """)
+
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return jsonify(rows)
+
+
+# ---------- VS YESTERDAY ----------
+
+@app.route("/artists-vs-yesterday")
+def artists_vs_yesterday():
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT
+    artist_name,
+
+    SUM(CASE WHEN DATE(scrobble_time)=CURRENT_DATE THEN 1 ELSE 0 END) today,
+
+    SUM(CASE WHEN DATE(scrobble_time)=CURRENT_DATE-INTERVAL '1 day' THEN 1 ELSE 0 END) yesterday
+
+    FROM scrobbles
+
+    GROUP BY artist_name
+
+    ORDER BY today DESC
+    LIMIT 30
+    """)
+
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return jsonify(rows)
+
+
+# ---------- DEBUG LASTFM ----------
+
+@app.route("/debug-lastfm")
+def debug_lastfm():
+
+    user=request.args.get("user")
+
+    url="https://ws.audioscrobbler.com/2.0/"
+
+    params={
+    "method":"user.getrecenttracks",
+    "user":user,
+    "api_key":os.environ.get("LASTFM_API_KEY"),
+    "format":"json",
+    "limit":1
+    }
+
+    r=requests.get(url,params=params)
+
+    return f"<pre>{r.text}</pre>"
+
+
+# ---------- HEALTH ----------
+
+@app.route("/health")
+def health():
+    return {"ok":True}
+
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+
+    port=int(os.environ.get("PORT",10000))
+
+    app.run(host="0.0.0.0",port=port)
