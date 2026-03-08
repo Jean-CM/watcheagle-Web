@@ -380,6 +380,33 @@ def run_check():
 def collect_now():
     result = subprocess.run(["python", "collect_scrobbles.py"], capture_output=True, text=True)
     return f"<pre>{result.stdout}\n{result.stderr}</pre>"
+@app.route("/scrobbles-latest")
+def scrobbles_latest():
+    init_db()
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            id,
+            team_name,
+            lastfm_user,
+            app_name,
+            artist_name,
+            track_name,
+            album_name,
+            scrobble_time,
+            collected_at
+        FROM scrobbles
+        ORDER BY scrobble_time DESC
+        LIMIT 50;
+    """)
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return jsonify({"ok": True, "rows": rows})
     
 
 if __name__ == "__main__":
