@@ -375,6 +375,12 @@ def run_check():
     result = subprocess.run(["python", "watch_scrobbles.py"], capture_output=True, text=True)
     return f"<pre>{result.stdout}\n{result.stderr}</pre>"
 
+    
+@app.route("/collect-now")
+def collect_now():
+    result = subprocess.run(["python", "collect_scrobbles.py"], capture_output=True, text=True)
+    return f"<pre>{result.stdout}\n{result.stderr}</pre>"
+    
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
