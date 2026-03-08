@@ -394,3 +394,30 @@ if __name__ == "__main__":
     port=int(os.environ.get("PORT",10000))
 
     app.run(host="0.0.0.0",port=port)
+
+@app.route("/daily-plays")
+def daily_plays():
+
+    conn=get_conn()
+    cur=conn.cursor()
+
+    cur.execute("""
+
+    SELECT
+    DATE(scrobble_time) day,
+    COUNT(*) plays
+
+    FROM scrobbles
+
+    GROUP BY day
+    ORDER BY day DESC
+    LIMIT 30
+
+    """)
+
+    rows=cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return jsonify(rows)
