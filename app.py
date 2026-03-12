@@ -18,6 +18,7 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
+    # Tabla de equipos
     cur.execute("""
     CREATE TABLE IF NOT EXISTS teams (
         id SERIAL PRIMARY KEY,
@@ -34,20 +35,47 @@ def init_db():
     );
     """)
 
+    # Tabla de scrobbles
     cur.execute("""
     CREATE TABLE IF NOT EXISTS scrobbles (
         id SERIAL PRIMARY KEY,
         team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
-        team_name VARCHAR(100) NOT NULL,
-        lastfm_user VARCHAR(100) NOT NULL,
-        app_name VARCHAR(50) NOT NULL,
+        team_name VARCHAR(100),
+        lastfm_user VARCHAR(100),
+        app_name VARCHAR(50),
         artist VARCHAR(255),
         track VARCHAR(255),
         album VARCHAR(255),
-        scrobbled_at TIMESTAMP NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(lastfm_user, artist, track, scrobbled_at)
+        scrobbled_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+    """)
+
+    # Migraciones suaves
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_id INTEGER;")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_name VARCHAR(100);")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS lastfm_user VARCHAR(100);")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS app_name VARCHAR(50);")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS artist VARCHAR(255);")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS track VARCHAR(255);")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS album VARCHAR(255);")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS scrobbled_at TIMESTAMP;")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+
+    # Constraint única para evitar duplicados
+    cur.execute("""
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint
+            WHERE conname = 'uq_scrobble_unique'
+        ) THEN
+            ALTER TABLE scrobbles
+            ADD CONSTRAINT uq_scrobble_unique
+            UNIQUE (lastfm_user, artist, track, scrobbled_at);
+        END IF;
+    END$$;
     """)
 
     conn.commit()
@@ -94,6 +122,8 @@ def render_layout(title, body_html):
             }}
             .btn-green {{ background:#16a34a; }}
             .btn-blue {{ background:#2563eb; }}
+            .btn-red {{ background:#dc2626; }}
+            .btn-orange {{ background:#ea580c; }}
             .card {{
                 background:#0f1b33;
                 padding:20px;
@@ -149,7 +179,39 @@ def render_layout(title, body_html):
                 padding:2px 6px;
                 border-radius:6px;
             }}
+            input {{
+                padding:10px;
+                border-radius:8px;
+                border:1px solid #334155;
+                background:#0b1220;
+                color:white;
+            }}
+            .inline-form {{
+                display:flex;
+                gap:10px;
+                flex-wrap:wrap;
+                align-items:center;
+                margin-top:12px;
+            }}
         </style>
+        <script>
+            function deleteById() {{
+                const id = document.getElementById('deleteId').value;
+                if (!id) {{
+                    alert('Pon un ID');
+                    return;
+                }}
+                if (confirm('¿Seguro que quieres borrar el equipo con ID ' + id + '?')) {{
+                    window.location.href = '/delete-team?id=' + id;
+                }}
+            }}
+
+            function resetAll() {{
+                if (confirm('¿Seguro que quieres borrar TODOS los equipos y TODOS los scrobbles y reiniciar los IDs?')) {{
+                    window.location.href = '/reset-teams';
+                }}
+            }}
+        </script>
     </head>
     <body>
         <div class="topbar">
@@ -160,6 +222,7 @@ def render_layout(title, body_html):
                 <button class="btn btn-blue" onclick="window.location.reload()">Refrescar</button>
                 <a class="btn btn-green" href="/run-check">Correr chequeo</a>
                 <a class="btn btn-green" href="/run-collector">Correr collector</a>
+                <button class="btn btn-red" onclick="resetAll()">Borrar todo</button>
             </div>
         </div>
         {body_html}
@@ -214,9 +277,13 @@ def home():
     body = f"""
     <div class="card">
         <p><strong>Monitores activos:</strong> {len(teams)}</p>
-        <p class="hint">Reset total: <code>/reset-teams</code></p>
-        <p class="hint">Carga masiva simple: <code>/load-teams?total=100&prefix=equipo&app=spotify</code></p>
+        <p class="hint">Carga simple: <code>/load-teams?total=100&prefix=equipo&app=spotify</code></p>
         <p class="hint">Carga por bloques: <code>/load-batch?spotify=40&tidal=30&apple=30</code></p>
+
+        <div class="inline-form">
+            <input id="deleteId" type="number" placeholder="ID a borrar">
+            <button class="btn btn-orange" onclick="deleteById()">Eliminar por ID</button>
+        </div>
     </div>
 
     <table>
@@ -255,7 +322,7 @@ def analytics():
     diff = plays_today - plays_yesterday
 
     cur.execute("""
-        SELECT artist, COUNT(*) AS plays
+        SELECT COALESCE(artist, '-') AS artist, COUNT(*) AS plays
         FROM scrobbles
         WHERE DATE(scrobbled_at) = CURRENT_DATE
         GROUP BY artist
@@ -265,7 +332,7 @@ def analytics():
     top_artists = cur.fetchall()
 
     cur.execute("""
-        SELECT track, artist, COUNT(*) AS plays
+        SELECT COALESCE(track, '-') AS track, COALESCE(artist, '-') AS artist, COUNT(*) AS plays
         FROM scrobbles
         WHERE DATE(scrobbled_at) = CURRENT_DATE
         GROUP BY track, artist
@@ -275,7 +342,7 @@ def analytics():
     top_tracks = cur.fetchall()
 
     cur.execute("""
-        SELECT team_name, COUNT(*) AS plays
+        SELECT COALESCE(team_name, '-') AS team_name, COUNT(*) AS plays
         FROM scrobbles
         WHERE DATE(scrobbled_at) = CURRENT_DATE
         GROUP BY team_name
@@ -285,7 +352,7 @@ def analytics():
     plays_by_team = cur.fetchall()
 
     cur.execute("""
-        SELECT app_name, COUNT(*) AS plays
+        SELECT COALESCE(app_name, '-') AS app_name, COUNT(*) AS plays
         FROM scrobbles
         WHERE DATE(scrobbled_at) = CURRENT_DATE
         GROUP BY app_name
@@ -295,13 +362,11 @@ def analytics():
 
     cur.execute("""
         SELECT
-            artist,
+            COALESCE(artist, '-') AS artist,
             SUM(CASE WHEN DATE(scrobbled_at) = CURRENT_DATE THEN 1 ELSE 0 END) AS hoy,
             SUM(CASE WHEN DATE(scrobbled_at) = CURRENT_DATE - INTERVAL '1 day' THEN 1 ELSE 0 END) AS ayer
         FROM scrobbles
         GROUP BY artist
-        HAVING SUM(CASE WHEN DATE(scrobbled_at) = CURRENT_DATE THEN 1 ELSE 0 END) > 0
-            OR SUM(CASE WHEN DATE(scrobbled_at) = CURRENT_DATE - INTERVAL '1 day' THEN 1 ELSE 0 END) > 0
         ORDER BY hoy DESC, ayer DESC
         LIMIT 15
     """)
@@ -438,6 +503,7 @@ def delete_team():
     conn.commit()
     cur.close()
     conn.close()
+
     return jsonify({"deleted": row})
 
 
@@ -453,20 +519,33 @@ def delete_many():
     conn.commit()
     cur.close()
     conn.close()
+
     return jsonify({"deleted_ids": id_list})
 
 
 @app.route("/reset-teams")
 def reset_teams():
     init_db()
+
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("DELETE FROM scrobbles")
-    cur.execute("DELETE FROM teams")
+
+    # Borrar todo
+    cur.execute("DELETE FROM scrobbles;")
+    cur.execute("DELETE FROM teams;")
+
+    # Reiniciar IDs
+    cur.execute("ALTER SEQUENCE IF EXISTS scrobbles_id_seq RESTART WITH 1;")
+    cur.execute("ALTER SEQUENCE IF EXISTS teams_id_seq RESTART WITH 1;")
+
     conn.commit()
     cur.close()
     conn.close()
-    return jsonify({"ok": True, "message": "All teams and scrobbles deleted"})
+
+    return jsonify({
+        "ok": True,
+        "message": "All teams and scrobbles deleted. IDs restarted from 1."
+    })
 
 
 @app.route("/load-teams")
@@ -495,6 +574,7 @@ def load_teams():
     conn.commit()
     cur.close()
     conn.close()
+
     return jsonify({"total_created": len(created)})
 
 
