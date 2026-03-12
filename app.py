@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, redirect
+from flask import Flask, request, jsonify
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -123,12 +123,12 @@ def init_db():
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS scrobbled_at TIMESTAMP;")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
 
-    # Quitar NOT NULL heredado si venía de esquema viejo
+    # Quitar NOT NULL heredado de esquemas viejos
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN artist DROP NOT NULL;")
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN track DROP NOT NULL;")
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN album DROP NOT NULL;")
 
-    # Índice único dedupe
+    # Índice único para evitar duplicados
     cur.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_scrobbles_unique
     ON scrobbles (lastfm_user, artist, track, scrobbled_at);
@@ -156,7 +156,7 @@ def render_layout(title, body_html):
                 display:flex;
                 justify-content:space-between;
                 align-items:center;
-                margin-bottom:20px;
+                margin-bottom:18px;
                 gap:16px;
                 flex-wrap:wrap;
             }}
@@ -175,22 +175,24 @@ def render_layout(title, body_html):
                 border:none;
                 cursor:pointer;
                 font-weight:bold;
+                font-size:14px;
             }}
             .btn-green {{ background:#16a34a; }}
             .btn-blue {{ background:#2563eb; }}
             .btn-red {{ background:#dc2626; }}
             .btn-orange {{ background:#ea580c; }}
+
             .card {{
                 background:#0f1b33;
-                padding:20px;
+                padding:18px;
                 border-radius:12px;
-                margin-bottom:20px;
+                margin-bottom:18px;
             }}
             .grid {{
                 display:grid;
                 grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
                 gap:16px;
-                margin-bottom:20px;
+                margin-bottom:18px;
             }}
             .kpi {{
                 background:#0f1b33;
@@ -212,12 +214,13 @@ def render_layout(title, body_html):
                 background:#0f1b33;
                 border-radius:12px;
                 overflow:hidden;
-                margin-bottom:20px;
+                margin-bottom:18px;
             }}
             th, td {{
                 padding:12px;
                 border-bottom:1px solid #1f2937;
                 text-align:left;
+                font-size:14px;
             }}
             th {{
                 background:#1a2740;
@@ -227,15 +230,16 @@ def render_layout(title, body_html):
             .incident {{ color:#ef4444; font-weight:bold; }}
             .hint {{
                 color:#9ca3af;
-                font-size:14px;
-                margin-top:8px;
+                font-size:13px;
+                margin-top:6px;
             }}
             code {{
                 background:#111827;
                 padding:2px 6px;
                 border-radius:6px;
+                font-size:12px;
             }}
-            input, textarea, select {{
+            input, textarea {{
                 padding:10px;
                 border-radius:8px;
                 border:1px solid #334155;
@@ -243,24 +247,37 @@ def render_layout(title, body_html):
                 color:white;
                 width:100%;
                 box-sizing:border-box;
+                font-size:14px;
             }}
             textarea {{
-                min-height:160px;
+                min-height:100px;
             }}
             .inline-form {{
                 display:flex;
                 gap:10px;
                 flex-wrap:wrap;
                 align-items:center;
-                margin-top:12px;
+                margin-top:10px;
             }}
-            .two-col {{
+            .quick-row {{
                 display:grid;
-                grid-template-columns:1fr 1fr;
+                grid-template-columns:320px 1fr;
                 gap:16px;
+                margin-bottom:16px;
+            }}
+            .compact-card {{
+                background:#0f1b33;
+                padding:14px;
+                border-radius:12px;
+            }}
+            .compact-card h3 {{
+                margin:0 0 10px 0;
+                font-size:18px;
             }}
             @media (max-width: 900px) {{
-                .two-col {{ grid-template-columns:1fr; }}
+                .quick-row {{
+                    grid-template-columns:1fr;
+                }}
             }}
         </style>
         <script>
@@ -347,22 +364,22 @@ def home():
     <div class="card">
         <p><strong>Monitores activos:</strong> {len(teams)}</p>
         <p class="hint">Borrar todo + reiniciar IDs: <code>/reset-teams</code></p>
-        <p class="hint">Eliminar 1 equipo: <code>/delete-team?id=7</code></p>
+        <p class="hint">Eliminar un equipo: <code>/delete-team?id=7</code></p>
         <p class="hint">Carga simple: <code>/load-teams?total=100&prefix=equipo&app=spotify</code></p>
         <p class="hint">Carga por bloques: <code>/load-batch?spotify=40&tidal=30&apple=30</code></p>
     </div>
 
-    <div class="two-col">
-        <div class="card">
-            <h2>Eliminar por ID</h2>
+    <div class="quick-row">
+        <div class="compact-card">
+            <h3>Eliminar por ID</h3>
             <div class="inline-form">
                 <input id="deleteId" type="number" placeholder="ID a borrar">
-                <button class="btn btn-orange" onclick="deleteById()">Eliminar por ID</button>
+                <button class="btn btn-orange" onclick="deleteById()">Eliminar</button>
             </div>
         </div>
 
-        <div class="card">
-            <h2>Importar equipos reales de Last.fm</h2>
+        <div class="compact-card">
+            <h3>Importar equipos reales de Last.fm</h3>
             <p class="hint">Formato: <code>Nombre visible,app,usuario_real_lastfm</code></p>
             <p class="hint">Ejemplo:<br>
             <code>Equipo 01,spotify,JeanCMP</code><br>
@@ -371,7 +388,7 @@ def home():
             <form method="POST" action="/import-real-teams">
                 <textarea name="lines" placeholder="Equipo 01,spotify,JeanCMP&#10;equipoG01,spotify,equipoG01"></textarea>
                 <div class="inline-form">
-                    <button class="btn btn-green" type="submit">Importar solo usuarios existentes</button>
+                    <button class="btn btn-green" type="submit">Importar usuarios válidos</button>
                 </div>
             </form>
         </div>
@@ -401,6 +418,7 @@ def home():
 @app.route("/analytics")
 def analytics():
     init_db()
+
     conn = get_conn()
     cur = conn.cursor()
 
@@ -462,6 +480,22 @@ def analytics():
         LIMIT 15
     """)
     compare_artists = cur.fetchall()
+
+    cur.execute("""
+        SELECT
+            to_char(
+                date_trunc('hour', scrobbled_at)
+                + floor(extract(minute from scrobbled_at) / 30) * interval '30 minutes',
+                'YYYY-MM-DD HH24:MI'
+            ) AS slot_30m,
+            COUNT(*) AS plays
+        FROM scrobbles
+        WHERE scrobbled_at >= NOW() - INTERVAL '24 hours'
+        GROUP BY 1
+        ORDER BY 1 DESC
+        LIMIT 24
+    """)
+    plays_30m = cur.fetchall()
 
     cur.close()
     conn.close()
@@ -525,6 +559,14 @@ def analytics():
         <table>
             <thead><tr><th>App</th><th>Plays</th></tr></thead>
             <tbody>{rows_simple(plays_by_app, ['app_name', 'plays']) if plays_by_app else '<tr><td colspan="2">Sin datos</td></tr>'}</tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h2>Reproducciones cada 30 minutos (últimas 24h)</h2>
+        <table>
+            <thead><tr><th>Bloque</th><th>Plays</th></tr></thead>
+            <tbody>{rows_simple(plays_30m, ['slot_30m', 'plays']) if plays_30m else '<tr><td colspan="2">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
     """
@@ -604,14 +646,6 @@ def import_real_teams():
     conn.commit()
     cur.close()
     conn.close()
-
-    summary = {
-        "ok": True,
-        "created_count": len(created),
-        "skipped_count": len(skipped),
-        "created": created,
-        "skipped": skipped
-    }
 
     return render_layout(
         "Resultado importación",
