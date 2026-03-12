@@ -60,7 +60,7 @@ def init_db():
     );
     """)
 
-    # Scrobbles
+    # Scrobbles base
     cur.execute("""
     CREATE TABLE IF NOT EXISTS scrobbles (
         id SERIAL PRIMARY KEY,
@@ -76,7 +76,43 @@ def init_db():
     );
     """)
 
-    # Safe migrations
+    # Renombrar columnas viejas si existen
+    cur.execute("""
+    DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='artist_name'
+        ) AND NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='artist'
+        ) THEN
+            ALTER TABLE scrobbles RENAME COLUMN artist_name TO artist;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='track_name'
+        ) AND NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='track'
+        ) THEN
+            ALTER TABLE scrobbles RENAME COLUMN track_name TO track;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='album_name'
+        ) AND NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='album'
+        ) THEN
+            ALTER TABLE scrobbles RENAME COLUMN album_name TO album;
+        END IF;
+    END $$;
+    """)
+
+    # Agregar columnas faltantes
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_id INTEGER;")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_name VARCHAR(100);")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS lastfm_user VARCHAR(100);")
@@ -87,7 +123,12 @@ def init_db():
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS scrobbled_at TIMESTAMP;")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
 
-    # Unique index for dedupe
+    # Quitar NOT NULL heredado si venía de esquema viejo
+    cur.execute("ALTER TABLE scrobbles ALTER COLUMN artist DROP NOT NULL;")
+    cur.execute("ALTER TABLE scrobbles ALTER COLUMN track DROP NOT NULL;")
+    cur.execute("ALTER TABLE scrobbles ALTER COLUMN album DROP NOT NULL;")
+
+    # Índice único dedupe
     cur.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_scrobbles_unique
     ON scrobbles (lastfm_user, artist, track, scrobbled_at);
