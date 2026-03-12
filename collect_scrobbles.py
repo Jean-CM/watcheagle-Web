@@ -90,12 +90,13 @@ def main():
                 if cur.rowcount > 0:
                     inserted += 1
 
+            conn.commit()
             print(f"[OK] Collector {team['name']} | {team['lastfm_user']}")
 
         except Exception as e:
+            conn.rollback()
             print(f"[ERROR] Collector {team['name']} | {team['lastfm_user']} | {e}")
 
-    conn.commit()
     cur.close()
     conn.close()
 
