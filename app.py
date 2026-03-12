@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -8,21 +8,46 @@ import requests
 app = Flask(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
+LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
 
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 
+def lastfm_user_exists(username: str) -> bool:
+    if not username or not LASTFM_API_KEY:
+        return False
+
+    url = "https://ws.audioscrobbler.com/2.0/"
+    params = {
+        "method": "user.getinfo",
+        "user": username,
+        "api_key": LASTFM_API_KEY,
+        "format": "json"
+    }
+
+    try:
+        r = requests.get(url, params=params, timeout=20)
+        data = r.json()
+
+        if "error" in data:
+            return False
+
+        return "user" in data
+    except Exception:
+        return False
+
+
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # Tabla de equipos
+    # Teams
     cur.execute("""
     CREATE TABLE IF NOT EXISTS teams (
         id SERIAL PRIMARY KEY,
-        name VARCHAR(50) NOT NULL,
+        name VARCHAR(100) NOT NULL,
         app_name VARCHAR(50) NOT NULL,
         lastfm_user VARCHAR(100) NOT NULL UNIQUE,
         status VARCHAR(20) DEFAULT 'PENDING',
@@ -35,7 +60,7 @@ def init_db():
     );
     """)
 
-    # Tabla de scrobbles
+    # Scrobbles
     cur.execute("""
     CREATE TABLE IF NOT EXISTS scrobbles (
         id SERIAL PRIMARY KEY,
@@ -51,7 +76,7 @@ def init_db():
     );
     """)
 
-    # Migraciones suaves
+    # Safe migrations
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_id INTEGER;")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_name VARCHAR(100);")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS lastfm_user VARCHAR(100);")
@@ -62,64 +87,11 @@ def init_db():
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS scrobbled_at TIMESTAMP;")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
 
-    # Constraint única para evitar duplicados
-def init_db():
-    conn = get_conn()
-    cur = conn.cursor()
-
-    # Tabla teams
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS teams (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(50) NOT NULL,
-        app_name VARCHAR(50) NOT NULL,
-        lastfm_user VARCHAR(100) NOT NULL UNIQUE,
-        status VARCHAR(20) DEFAULT 'PENDING',
-        last_scrobble_at TIMESTAMP NULL,
-        last_check_at TIMESTAMP NULL,
-        idle_minutes INTEGER DEFAULT 0,
-        last_alert_at TIMESTAMP NULL,
-        active BOOLEAN DEFAULT TRUE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """)
-
-    # Tabla scrobbles
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS scrobbles (
-        id SERIAL PRIMARY KEY,
-        team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
-        team_name VARCHAR(100),
-        lastfm_user VARCHAR(100),
-        app_name VARCHAR(50),
-        artist VARCHAR(255),
-        track VARCHAR(255),
-        album VARCHAR(255),
-        scrobbled_at TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """)
-
-    # Migraciones suaves
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_id INTEGER;")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_name VARCHAR(100);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS lastfm_user VARCHAR(100);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS app_name VARCHAR(50);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS artist VARCHAR(255);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS track VARCHAR(255);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS album VARCHAR(255);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS scrobbled_at TIMESTAMP;")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
-
-    # Índice único seguro para evitar duplicados
+    # Unique index for dedupe
     cur.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_scrobbles_unique
     ON scrobbles (lastfm_user, artist, track, scrobbled_at);
     """)
-
-    conn.commit()
-    cur.close()
-    conn.close()
 
     conn.commit()
     cur.close()
@@ -222,12 +194,17 @@ def render_layout(title, body_html):
                 padding:2px 6px;
                 border-radius:6px;
             }}
-            input {{
+            input, textarea, select {{
                 padding:10px;
                 border-radius:8px;
                 border:1px solid #334155;
                 background:#0b1220;
                 color:white;
+                width:100%;
+                box-sizing:border-box;
+            }}
+            textarea {{
+                min-height:160px;
             }}
             .inline-form {{
                 display:flex;
@@ -235,6 +212,14 @@ def render_layout(title, body_html):
                 flex-wrap:wrap;
                 align-items:center;
                 margin-top:12px;
+            }}
+            .two-col {{
+                display:grid;
+                grid-template-columns:1fr 1fr;
+                gap:16px;
+            }}
+            @media (max-width: 900px) {{
+                .two-col {{ grid-template-columns:1fr; }}
             }}
         </style>
         <script>
@@ -250,7 +235,7 @@ def render_layout(title, body_html):
             }}
 
             function resetAll() {{
-                if (confirm('¿Seguro que quieres borrar TODOS los equipos y TODOS los scrobbles y reiniciar los IDs?')) {{
+                if (confirm('¿Seguro que quieres borrar TODOS los equipos, TODOS los scrobbles y reiniciar los IDs?')) {{
                     window.location.href = '/reset-teams';
                 }}
             }}
@@ -282,8 +267,8 @@ def home():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT id, name, app_name, lastfm_user, status, idle_minutes,
-               last_scrobble_at, last_check_at
+        SELECT id, name, app_name, lastfm_user, status,
+               idle_minutes, last_scrobble_at, last_check_at
         FROM teams
         WHERE active = TRUE
         ORDER BY id ASC
@@ -320,12 +305,34 @@ def home():
     body = f"""
     <div class="card">
         <p><strong>Monitores activos:</strong> {len(teams)}</p>
+        <p class="hint">Borrar todo + reiniciar IDs: <code>/reset-teams</code></p>
+        <p class="hint">Eliminar 1 equipo: <code>/delete-team?id=7</code></p>
         <p class="hint">Carga simple: <code>/load-teams?total=100&prefix=equipo&app=spotify</code></p>
         <p class="hint">Carga por bloques: <code>/load-batch?spotify=40&tidal=30&apple=30</code></p>
+    </div>
 
-        <div class="inline-form">
-            <input id="deleteId" type="number" placeholder="ID a borrar">
-            <button class="btn btn-orange" onclick="deleteById()">Eliminar por ID</button>
+    <div class="two-col">
+        <div class="card">
+            <h2>Eliminar por ID</h2>
+            <div class="inline-form">
+                <input id="deleteId" type="number" placeholder="ID a borrar">
+                <button class="btn btn-orange" onclick="deleteById()">Eliminar por ID</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Importar equipos reales de Last.fm</h2>
+            <p class="hint">Formato: <code>Nombre visible,app,usuario_real_lastfm</code></p>
+            <p class="hint">Ejemplo:<br>
+            <code>Equipo 01,spotify,JeanCMP</code><br>
+            <code>equipoG01,spotify,equipoG01</code></p>
+
+            <form method="POST" action="/import-real-teams">
+                <textarea name="lines" placeholder="Equipo 01,spotify,JeanCMP&#10;equipoG01,spotify,equipoG01"></textarea>
+                <div class="inline-form">
+                    <button class="btn btn-green" type="submit">Importar solo usuarios existentes</button>
+                </div>
+            </form>
         </div>
     </div>
 
@@ -511,6 +518,82 @@ def seed_team():
     return jsonify({"created": row})
 
 
+@app.route("/import-real-teams", methods=["POST"])
+def import_real_teams():
+    init_db()
+
+    lines_text = request.form.get("lines", "").strip()
+    if not lines_text:
+        return jsonify({"ok": False, "error": "No se recibió contenido"}), 400
+
+    lines = [x.strip() for x in lines_text.splitlines() if x.strip()]
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    created = []
+    skipped = []
+
+    for line in lines:
+        parts = [p.strip() for p in line.split(",")]
+
+        if len(parts) != 3:
+            skipped.append({"line": line, "reason": "Formato inválido. Usa nombre,app,user"})
+            continue
+
+        team_name, app_name, lastfm_user = parts
+
+        if not lastfm_user_exists(lastfm_user):
+            skipped.append({"line": line, "reason": "Usuario Last.fm no existe"})
+            continue
+
+        cur.execute("""
+            INSERT INTO teams (name, app_name, lastfm_user, status)
+            VALUES (%s, %s, %s, 'PENDING')
+            ON CONFLICT (lastfm_user) DO NOTHING
+            RETURNING id, name, app_name, lastfm_user
+        """, (team_name, app_name, lastfm_user))
+
+        row = cur.fetchone()
+        if row:
+            created.append(row)
+        else:
+            skipped.append({"line": line, "reason": "Ya existía en la base"})
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    summary = {
+        "ok": True,
+        "created_count": len(created),
+        "skipped_count": len(skipped),
+        "created": created,
+        "skipped": skipped
+    }
+
+    return render_layout(
+        "Resultado importación",
+        f"""
+        <div class="card">
+            <p><strong>Creados:</strong> {len(created)}</p>
+            <p><strong>Omitidos:</strong> {len(skipped)}</p>
+            <p><a class="btn btn-blue" href="/">Volver al monitor</a></p>
+        </div>
+
+        <div class="card">
+            <h2>Creados</h2>
+            <pre>{created}</pre>
+        </div>
+
+        <div class="card">
+            <h2>Omitidos</h2>
+            <pre>{skipped}</pre>
+        </div>
+        """
+    )
+
+
 @app.route("/update-team")
 def update_team():
     init_db()
@@ -573,11 +656,9 @@ def reset_teams():
     conn = get_conn()
     cur = conn.cursor()
 
-    # Borrar todo
     cur.execute("DELETE FROM scrobbles;")
     cur.execute("DELETE FROM teams;")
 
-    # Reiniciar IDs
     cur.execute("ALTER SEQUENCE IF EXISTS scrobbles_id_seq RESTART WITH 1;")
     cur.execute("ALTER SEQUENCE IF EXISTS teams_id_seq RESTART WITH 1;")
 
@@ -668,7 +749,7 @@ def debug_lastfm():
     params = {
         "method": "user.getrecenttracks",
         "user": user,
-        "api_key": os.environ.get("LASTFM_API_KEY"),
+        "api_key": LASTFM_API_KEY,
         "format": "json",
         "limit": 5
     }
