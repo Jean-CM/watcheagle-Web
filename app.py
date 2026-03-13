@@ -42,7 +42,9 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # ===== teams =====
+    # =========================
+    # TABLA TEAMS
+    # =========================
     cur.execute("""
     CREATE TABLE IF NOT EXISTS teams (
         id SERIAL PRIMARY KEY,
@@ -59,7 +61,9 @@ def init_db():
     );
     """)
 
-    # ===== scrobbles =====
+    # =========================
+    # TABLA SCROBBLES
+    # =========================
     cur.execute("""
     CREATE TABLE IF NOT EXISTS scrobbles (
         id SERIAL PRIMARY KEY,
@@ -75,7 +79,9 @@ def init_db():
     );
     """)
 
-    # Agregar columnas nuevas si faltan
+    # =========================
+    # AGREGAR COLUMNAS NUEVAS SI FALTAN
+    # =========================
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_id INTEGER;")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_name VARCHAR(100);")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS lastfm_user VARCHAR(100);")
@@ -86,11 +92,13 @@ def init_db():
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS scrobbled_at TIMESTAMP;")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
 
-    # Resolver esquemas viejos
+    # =========================
+    # RESOLVER ESQUEMAS VIEJOS
+    # =========================
     cur.execute("""
     DO $$
     BEGIN
-        -- Si existe artist_name y NO existe artist, renombrar
+        -- Renombrar si solo existen las viejas
         IF EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_name='scrobbles' AND column_name='artist_name'
@@ -101,7 +109,6 @@ def init_db():
             ALTER TABLE scrobbles RENAME COLUMN artist_name TO artist;
         END IF;
 
-        -- Si existe track_name y NO existe track, renombrar
         IF EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_name='scrobbles' AND column_name='track_name'
@@ -112,7 +119,6 @@ def init_db():
             ALTER TABLE scrobbles RENAME COLUMN track_name TO track;
         END IF;
 
-        -- Si existe album_name y NO existe album, renombrar
         IF EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_name='scrobbles' AND column_name='album_name'
@@ -122,10 +128,22 @@ def init_db():
         ) THEN
             ALTER TABLE scrobbles RENAME COLUMN album_name TO album;
         END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='scrobble_time'
+        ) AND NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='scrobbled_at'
+        ) THEN
+            ALTER TABLE scrobbles RENAME COLUMN scrobble_time TO scrobbled_at;
+        END IF;
     END $$;
     """)
 
-    # Si las columnas viejas siguen existiendo, copiar datos y quitar NOT NULL
+    # =========================
+    # COPIAR DATOS DE COLUMNAS VIEJAS SI SIGUEN EXISTIENDO
+    # =========================
     cur.execute("""
     DO $$
     BEGIN
@@ -136,7 +154,6 @@ def init_db():
             UPDATE scrobbles
             SET artist = COALESCE(artist, artist_name)
             WHERE artist IS NULL;
-            ALTER TABLE scrobbles ALTER COLUMN artist_name DROP NOT NULL;
         END IF;
 
         IF EXISTS (
@@ -146,7 +163,6 @@ def init_db():
             UPDATE scrobbles
             SET track = COALESCE(track, track_name)
             WHERE track IS NULL;
-            ALTER TABLE scrobbles ALTER COLUMN track_name DROP NOT NULL;
         END IF;
 
         IF EXISTS (
@@ -156,17 +172,63 @@ def init_db():
             UPDATE scrobbles
             SET album = COALESCE(album, album_name)
             WHERE album IS NULL;
-            ALTER TABLE scrobbles ALTER COLUMN album_name DROP NOT NULL;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='scrobble_time'
+        ) THEN
+            UPDATE scrobbles
+            SET scrobbled_at = COALESCE(scrobbled_at, scrobble_time)
+            WHERE scrobbled_at IS NULL;
         END IF;
     END $$;
     """)
 
-    # Quitar NOT NULL heredados en columnas nuevas
+    # =========================
+    # QUITAR NOT NULL HEREDADOS
+    # =========================
+    cur.execute("""
+    DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='artist_name'
+        ) THEN
+            ALTER TABLE scrobbles ALTER COLUMN artist_name DROP NOT NULL;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='track_name'
+        ) THEN
+            ALTER TABLE scrobbles ALTER COLUMN track_name DROP NOT NULL;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='album_name'
+        ) THEN
+            ALTER TABLE scrobbles ALTER COLUMN album_name DROP NOT NULL;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='scrobble_time'
+        ) THEN
+            ALTER TABLE scrobbles ALTER COLUMN scrobble_time DROP NOT NULL;
+        END IF;
+    END $$;
+    """)
+
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN artist DROP NOT NULL;")
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN track DROP NOT NULL;")
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN album DROP NOT NULL;")
+    cur.execute("ALTER TABLE scrobbles ALTER COLUMN scrobbled_at DROP NOT NULL;")
 
-    # Índice único para evitar duplicados
+    # =========================
+    # ÍNDICE ÚNICO
+    # =========================
     cur.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_scrobbles_unique
     ON scrobbles (lastfm_user, artist, track, scrobbled_at);
@@ -188,7 +250,7 @@ def render_layout(title, body_html):
                 font-family: Arial, sans-serif;
                 background: #071226;
                 color: #e5e7eb;
-                padding: 20px;
+                padding: 18px;
                 margin: 0;
             }}
 
@@ -196,8 +258,8 @@ def render_layout(title, body_html):
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                margin-bottom: 14px;
-                gap: 12px;
+                margin-bottom: 12px;
+                gap: 10px;
                 flex-wrap: wrap;
             }}
 
@@ -211,7 +273,7 @@ def render_layout(title, body_html):
                 background: #1a2740;
                 color: white;
                 text-decoration: none;
-                padding: 9px 13px;
+                padding: 8px 12px;
                 border-radius: 8px;
                 display: inline-block;
                 border: none;
@@ -227,21 +289,21 @@ def render_layout(title, body_html):
 
             .card {{
                 background: #0f1b33;
-                padding: 14px;
+                padding: 12px;
                 border-radius: 12px;
-                margin-bottom: 14px;
+                margin-bottom: 12px;
             }}
 
             .grid {{
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-                gap: 12px;
-                margin-bottom: 14px;
+                grid-template-columns: repeat(4, minmax(140px, 1fr));
+                gap: 10px;
+                margin-bottom: 12px;
             }}
 
             .kpi {{
                 background: #0f1b33;
-                padding: 14px;
+                padding: 12px;
                 border-radius: 12px;
             }}
 
@@ -251,9 +313,9 @@ def render_layout(title, body_html):
             }}
 
             .kpi .value {{
-                font-size: 26px;
+                font-size: 24px;
                 font-weight: bold;
-                margin-top: 8px;
+                margin-top: 6px;
             }}
 
             table {{
@@ -262,7 +324,7 @@ def render_layout(title, body_html):
                 background: #0f1b33;
                 border-radius: 12px;
                 overflow: hidden;
-                margin-bottom: 14px;
+                margin-bottom: 12px;
             }}
 
             th, td {{
@@ -282,8 +344,8 @@ def render_layout(title, body_html):
 
             .hint {{
                 color: #9ca3af;
-                font-size: 12px;
-                margin-top: 5px;
+                font-size: 11px;
+                margin-top: 4px;
             }}
 
             code {{
@@ -294,7 +356,7 @@ def render_layout(title, body_html):
             }}
 
             input, textarea, select {{
-                padding: 9px;
+                padding: 8px;
                 border-radius: 8px;
                 border: 1px solid #334155;
                 background: #0b1220;
@@ -305,7 +367,7 @@ def render_layout(title, body_html):
             }}
 
             textarea {{
-                min-height: 78px;
+                min-height: 68px;
             }}
 
             .inline-form {{
@@ -316,11 +378,12 @@ def render_layout(title, body_html):
                 margin-top: 8px;
             }}
 
-            .quick-grid {{
+            .monitor-layout {{
                 display: grid;
-                grid-template-columns: 220px 1fr 220px;
-                gap: 12px;
-                margin-bottom: 14px;
+                grid-template-columns: 220px 220px 1fr 220px;
+                gap: 10px;
+                margin-bottom: 12px;
+                align-items: start;
             }}
 
             .compact-card {{
@@ -331,29 +394,21 @@ def render_layout(title, body_html):
 
             .compact-card h3 {{
                 margin: 0 0 8px 0;
-                font-size: 16px;
-            }}
-
-            .filters {{
-                display: grid;
-                grid-template-columns: repeat(4, minmax(150px, 1fr));
-                gap: 10px;
-                align-items: end;
-                margin-bottom: 14px;
+                font-size: 15px;
             }}
 
             .chart-card {{
                 background: #0f1b33;
                 padding: 14px;
                 border-radius: 12px;
-                margin-bottom: 14px;
+                margin-bottom: 12px;
             }}
 
-            @media (max-width: 1100px) {{
-                .quick-grid {{
-                    grid-template-columns: 1fr;
+            @media (max-width: 1200px) {{
+                .grid {{
+                    grid-template-columns: repeat(2, minmax(140px, 1fr));
                 }}
-                .filters {{
+                .monitor-layout {{
                     grid-template-columns: 1fr;
                 }}
             }}
@@ -510,31 +565,26 @@ def home():
         </div>
     </div>
 
-    <form method="GET" action="/" class="filters">
-        <div class="card" style="margin-bottom:0;">
-            <div class="hint">Filtrar por app</div>
-            <select name="app">{app_options}</select>
-        </div>
-        <div class="card" style="margin-bottom:0;">
-            <div class="hint">Filtrar por estado</div>
-            <select name="status">{status_options}</select>
-        </div>
-        <div class="card" style="margin-bottom:0; display:flex; align-items:end;">
-            <button class="btn btn-blue" type="submit">Aplicar filtros</button>
-        </div>
-        <div class="card" style="margin-bottom:0;">
-            <div class="hint">Atajo</div>
-            <code>/reset-teams</code>
-        </div>
-    </form>
-
-    <div class="quick-grid">
+    <div class="monitor-layout">
         <div class="compact-card">
             <h3>Eliminar por ID</h3>
             <input id="deleteId" type="number" placeholder="ID a borrar">
             <div class="inline-form">
                 <button class="btn btn-orange" onclick="deleteById()">Eliminar</button>
             </div>
+        </div>
+
+        <div class="compact-card">
+            <h3>Filtros</h3>
+            <form method="GET" action="/">
+                <div class="hint">App</div>
+                <select name="app">{app_options}</select>
+                <div class="hint" style="margin-top:8px;">Estado</div>
+                <select name="status">{status_options}</select>
+                <div class="inline-form">
+                    <button class="btn btn-blue" type="submit">Aplicar</button>
+                </div>
+            </form>
         </div>
 
         <div class="compact-card">
@@ -733,38 +783,43 @@ def analytics():
         month_options += f'<option value="{m["month_key"]}" {selected}>{m["month_key"]}</option>'
 
     body = f"""
-    <form method="GET" action="/analytics" class="filters">
-        <div class="card" style="margin-bottom:0;">
-            <div class="hint">Filtrar por app</div>
-            <select name="app">{app_options}</select>
+    <div class="monitor-layout" style="grid-template-columns:220px 220px 1fr 1fr;">
+        <div class="compact-card">
+            <h3>Filtro app</h3>
+            <form method="GET" action="/analytics">
+                <select name="app">{app_options}</select>
+                <input type="hidden" name="month" value="{month_filter}">
+                <div class="inline-form">
+                    <button class="btn btn-blue" type="submit">Aplicar</button>
+                </div>
+            </form>
         </div>
-        <div class="card" style="margin-bottom:0;">
-            <div class="hint">Filtrar por mes</div>
-            <select name="month">{month_options}</select>
-        </div>
-        <div class="card" style="margin-bottom:0;display:flex;align-items:end;">
-            <button class="btn btn-blue" type="submit">Aplicar filtros</button>
-        </div>
-    </form>
 
-    <div class="grid">
+        <div class="compact-card">
+            <h3>Filtro mes</h3>
+            <form method="GET" action="/analytics">
+                <select name="month">{month_options}</select>
+                <input type="hidden" name="app" value="{app_filter}">
+                <div class="inline-form">
+                    <button class="btn btn-blue" type="submit">Aplicar</button>
+                </div>
+            </form>
+        </div>
+
         <div class="kpi">
             <div class="label">Plays hoy</div>
             <div class="value">{plays_today}</div>
         </div>
+
         <div class="kpi">
-            <div class="label">Plays ayer</div>
-            <div class="value">{plays_yesterday}</div>
-        </div>
-        <div class="kpi">
-            <div class="label">Variación vs ayer</div>
-            <div class="value">{diff}</div>
+            <div class="label">Plays ayer / Variación</div>
+            <div class="value">{plays_yesterday} / {diff}</div>
         </div>
     </div>
 
     <div class="chart-card">
         <h2 style="margin-top:0;">Tendencia diaria de reproducciones</h2>
-        <canvas id="dailyLineChart" height="100"></canvas>
+        <canvas id="dailyLineChart" height="95"></canvas>
     </div>
 
     <div class="card">
