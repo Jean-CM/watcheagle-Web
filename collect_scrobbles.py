@@ -13,7 +13,6 @@ def get_conn():
 
 
 def cleanup_legacy_scrobbles_schema(cur):
-    # Quitar NOT NULL heredados en columnas viejas si existen
     cur.execute("""
     DO $$
     BEGIN
@@ -36,6 +35,13 @@ def cleanup_legacy_scrobbles_schema(cur):
             WHERE table_name='scrobbles' AND column_name='album_name'
         ) THEN
             ALTER TABLE scrobbles ALTER COLUMN album_name DROP NOT NULL;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='scrobble_time'
+        ) THEN
+            ALTER TABLE scrobbles ALTER COLUMN scrobble_time DROP NOT NULL;
         END IF;
     END $$;
     """)
