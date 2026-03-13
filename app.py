@@ -42,9 +42,7 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # =========================
-    # TABLA TEAMS
-    # =========================
+    # ===== teams =====
     cur.execute("""
     CREATE TABLE IF NOT EXISTS teams (
         id SERIAL PRIMARY KEY,
@@ -61,9 +59,7 @@ def init_db():
     );
     """)
 
-    # =========================
-    # TABLA SCROBBLES
-    # =========================
+    # ===== scrobbles =====
     cur.execute("""
     CREATE TABLE IF NOT EXISTS scrobbles (
         id SERIAL PRIMARY KEY,
@@ -79,9 +75,7 @@ def init_db():
     );
     """)
 
-    # =========================
-    # AGREGAR COLUMNAS NUEVAS SI FALTAN
-    # =========================
+    # ===== columnas nuevas =====
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_id INTEGER;")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_name VARCHAR(100);")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS lastfm_user VARCHAR(100);")
@@ -92,13 +86,10 @@ def init_db():
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS scrobbled_at TIMESTAMP;")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
 
-    # =========================
-    # RESOLVER ESQUEMAS VIEJOS
-    # =========================
+    # ===== renombrar columnas viejas si aplica =====
     cur.execute("""
     DO $$
     BEGIN
-        -- Renombrar si solo existen las viejas
         IF EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_name='scrobbles' AND column_name='artist_name'
@@ -141,9 +132,7 @@ def init_db():
     END $$;
     """)
 
-    # =========================
-    # COPIAR DATOS DE COLUMNAS VIEJAS SI SIGUEN EXISTIENDO
-    # =========================
+    # ===== copiar datos legacy si columnas viejas siguen existiendo =====
     cur.execute("""
     DO $$
     BEGIN
@@ -185,9 +174,7 @@ def init_db():
     END $$;
     """)
 
-    # =========================
-    # QUITAR NOT NULL HEREDADOS
-    # =========================
+    # ===== quitar NOT NULL heredados =====
     cur.execute("""
     DO $$
     BEGIN
@@ -226,9 +213,7 @@ def init_db():
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN album DROP NOT NULL;")
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN scrobbled_at DROP NOT NULL;")
 
-    # =========================
-    # ÍNDICE ÚNICO
-    # =========================
+    # ===== índice único =====
     cur.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_scrobbles_unique
     ON scrobbles (lastfm_user, artist, track, scrobbled_at);
@@ -253,7 +238,6 @@ def render_layout(title, body_html):
                 padding: 18px;
                 margin: 0;
             }}
-
             .topbar {{
                 display: flex;
                 justify-content: space-between;
@@ -262,13 +246,11 @@ def render_layout(title, body_html):
                 gap: 10px;
                 flex-wrap: wrap;
             }}
-
             .nav {{
                 display: flex;
                 gap: 8px;
                 flex-wrap: wrap;
             }}
-
             .nav a, .btn {{
                 background: #1a2740;
                 color: white;
@@ -281,7 +263,6 @@ def render_layout(title, body_html):
                 font-weight: bold;
                 font-size: 13px;
             }}
-
             .btn-green {{ background: #16a34a; }}
             .btn-blue {{ background: #2563eb; }}
             .btn-red {{ background: #dc2626; }}
@@ -293,31 +274,26 @@ def render_layout(title, body_html):
                 border-radius: 12px;
                 margin-bottom: 12px;
             }}
-
             .grid {{
                 display: grid;
                 grid-template-columns: repeat(4, minmax(140px, 1fr));
                 gap: 10px;
                 margin-bottom: 12px;
             }}
-
             .kpi {{
                 background: #0f1b33;
                 padding: 12px;
                 border-radius: 12px;
             }}
-
             .kpi .label {{
                 color: #9ca3af;
                 font-size: 12px;
             }}
-
             .kpi .value {{
                 font-size: 24px;
                 font-weight: bold;
                 margin-top: 6px;
             }}
-
             table {{
                 width: 100%;
                 border-collapse: collapse;
@@ -326,35 +302,29 @@ def render_layout(title, body_html):
                 overflow: hidden;
                 margin-bottom: 12px;
             }}
-
             th, td {{
                 padding: 10px;
                 border-bottom: 1px solid #1f2937;
                 text-align: left;
                 font-size: 13px;
             }}
-
             th {{
                 background: #1a2740;
             }}
-
             .ok {{ color: #22c55e; font-weight: bold; }}
             .warn {{ color: #f59e0b; font-weight: bold; }}
             .incident {{ color: #ef4444; font-weight: bold; }}
-
             .hint {{
                 color: #9ca3af;
                 font-size: 11px;
                 margin-top: 4px;
             }}
-
             code {{
                 background: #111827;
                 padding: 2px 6px;
                 border-radius: 6px;
                 font-size: 11px;
             }}
-
             input, textarea, select {{
                 padding: 8px;
                 border-radius: 8px;
@@ -365,11 +335,9 @@ def render_layout(title, body_html):
                 box-sizing: border-box;
                 font-size: 13px;
             }}
-
             textarea {{
                 min-height: 68px;
             }}
-
             .inline-form {{
                 display: flex;
                 gap: 8px;
@@ -377,7 +345,6 @@ def render_layout(title, body_html):
                 align-items: center;
                 margin-top: 8px;
             }}
-
             .monitor-layout {{
                 display: grid;
                 grid-template-columns: 220px 220px 1fr 220px;
@@ -385,25 +352,21 @@ def render_layout(title, body_html):
                 margin-bottom: 12px;
                 align-items: start;
             }}
-
             .compact-card {{
                 background: #0f1b33;
                 padding: 12px;
                 border-radius: 12px;
             }}
-
             .compact-card h3 {{
                 margin: 0 0 8px 0;
                 font-size: 15px;
             }}
-
             .chart-card {{
                 background: #0f1b33;
                 padding: 14px;
                 border-radius: 12px;
                 margin-bottom: 12px;
             }}
-
             @media (max-width: 1200px) {{
                 .grid {{
                     grid-template-columns: repeat(2, minmax(140px, 1fr));
