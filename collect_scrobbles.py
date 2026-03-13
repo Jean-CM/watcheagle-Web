@@ -46,6 +46,47 @@ def cleanup_legacy_scrobbles_schema(cur):
     END $$;
     """)
 
+    cur.execute("""
+    DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='artist_name'
+        ) THEN
+            UPDATE scrobbles
+            SET artist = COALESCE(artist, artist_name)
+            WHERE artist IS NULL;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='track_name'
+        ) THEN
+            UPDATE scrobbles
+            SET track = COALESCE(track, track_name)
+            WHERE track IS NULL;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='album_name'
+        ) THEN
+            UPDATE scrobbles
+            SET album = COALESCE(album, album_name)
+            WHERE album IS NULL;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='scrobble_time'
+        ) THEN
+            UPDATE scrobbles
+            SET scrobbled_at = COALESCE(scrobbled_at, scrobble_time)
+            WHERE scrobbled_at IS NULL;
+        END IF;
+    END $$;
+    """)
+
 
 def fetch_recent_tracks_page(user, page=1, limit=200):
     url = "https://ws.audioscrobbler.com/2.0/"
