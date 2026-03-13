@@ -42,7 +42,6 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # ===== teams =====
     cur.execute("""
     CREATE TABLE IF NOT EXISTS teams (
         id SERIAL PRIMARY KEY,
@@ -59,7 +58,6 @@ def init_db():
     );
     """)
 
-    # ===== scrobbles =====
     cur.execute("""
     CREATE TABLE IF NOT EXISTS scrobbles (
         id SERIAL PRIMARY KEY,
@@ -75,7 +73,6 @@ def init_db():
     );
     """)
 
-    # ===== columnas nuevas =====
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_id INTEGER;")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_name VARCHAR(100);")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS lastfm_user VARCHAR(100);")
@@ -86,7 +83,6 @@ def init_db():
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS scrobbled_at TIMESTAMP;")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
 
-    # ===== renombrar columnas viejas si aplica =====
     cur.execute("""
     DO $$
     BEGIN
@@ -132,7 +128,6 @@ def init_db():
     END $$;
     """)
 
-    # ===== copiar datos legacy si columnas viejas siguen existiendo =====
     cur.execute("""
     DO $$
     BEGIN
@@ -174,7 +169,6 @@ def init_db():
     END $$;
     """)
 
-    # ===== quitar NOT NULL heredados =====
     cur.execute("""
     DO $$
     BEGIN
@@ -213,7 +207,6 @@ def init_db():
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN album DROP NOT NULL;")
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN scrobbled_at DROP NOT NULL;")
 
-    # ===== índice único =====
     cur.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_scrobbles_unique
     ON scrobbles (lastfm_user, artist, track, scrobbled_at);
@@ -231,113 +224,273 @@ def render_layout(title, body_html):
         <title>{title}</title>
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
+            :root {{
+                --jatune-gold: #FACC15;
+                --jatune-cream: #FEFCE8;
+                --jatune-ink: #1F2937;
+                --jatune-ink-soft: #334155;
+                --jatune-card: rgba(255, 255, 255, 0.72);
+                --jatune-border: rgba(250, 204, 21, 0.28);
+                --jatune-shadow: 0 18px 50px rgba(15, 23, 42, 0.14);
+            }}
+
+            * {{
+                box-sizing: border-box;
+            }}
+
             body {{
                 font-family: Arial, sans-serif;
-                background: #071226;
-                color: #e5e7eb;
-                padding: 18px;
                 margin: 0;
+                padding: 22px;
+                color: var(--jatune-ink);
+                background:
+                    radial-gradient(circle at top left, rgba(250,204,21,0.35), transparent 28%),
+                    radial-gradient(circle at top right, rgba(250,204,21,0.18), transparent 24%),
+                    linear-gradient(180deg, #fffdf4 0%, #FEFCE8 48%, #fff9db 100%);
             }}
-            .topbar {{
+
+            .shell {{
+                max-width: 1600px;
+                margin: 0 auto;
+            }}
+
+            .brandbar {{
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                margin-bottom: 12px;
-                gap: 10px;
+                gap: 18px;
+                margin-bottom: 18px;
                 flex-wrap: wrap;
             }}
+
+            .brand-left {{
+                display: flex;
+                align-items: center;
+                gap: 14px;
+            }}
+
+            .brand-logo {{
+                width: 68px;
+                height: 68px;
+                border-radius: 18px;
+                object-fit: cover;
+                border: 2px solid rgba(250, 204, 21, 0.45);
+                box-shadow: 0 10px 30px rgba(250, 204, 21, 0.18);
+                background: #ffffff;
+            }}
+
+            .brand-copy h1 {{
+                margin: 0;
+                font-size: 26px;
+                font-weight: 800;
+                color: #111827;
+                letter-spacing: -0.4px;
+            }}
+
+            .brand-copy .sub {{
+                margin-top: 4px;
+                font-size: 13px;
+                color: #6B7280;
+            }}
+
+            .brand-badge {{
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                margin-top: 6px;
+                padding: 6px 10px;
+                border-radius: 999px;
+                background: rgba(250, 204, 21, 0.14);
+                color: #8a6510;
+                font-size: 12px;
+                font-weight: 700;
+                border: 1px solid rgba(250, 204, 21, 0.22);
+            }}
+
             .nav {{
                 display: flex;
                 gap: 8px;
                 flex-wrap: wrap;
+                align-items: center;
             }}
+
             .nav a, .btn {{
-                background: #1a2740;
-                color: white;
                 text-decoration: none;
-                padding: 8px 12px;
-                border-radius: 8px;
-                display: inline-block;
                 border: none;
                 cursor: pointer;
-                font-weight: bold;
+                border-radius: 12px;
+                padding: 10px 14px;
                 font-size: 13px;
+                font-weight: 800;
+                color: #111827;
+                background: rgba(255,255,255,0.8);
+                border: 1px solid rgba(250, 204, 21, 0.18);
+                box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+                transition: transform 0.15s ease, box-shadow 0.15s ease;
             }}
-            .btn-green {{ background: #16a34a; }}
-            .btn-blue {{ background: #2563eb; }}
-            .btn-red {{ background: #dc2626; }}
-            .btn-orange {{ background: #ea580c; }}
+
+            .nav a:hover, .btn:hover {{
+                transform: translateY(-1px);
+                box-shadow: 0 12px 28px rgba(15, 23, 42, 0.09);
+            }}
+
+            .btn-blue {{
+                background: linear-gradient(180deg, #FACC15 0%, #f2bb07 100%);
+                color: #1f2937;
+            }}
+
+            .btn-green {{
+                background: linear-gradient(180deg, #fde047 0%, #FACC15 100%);
+                color: #1f2937;
+            }}
+
+            .btn-red {{
+                background: linear-gradient(180deg, #fb7185 0%, #f43f5e 100%);
+                color: white;
+            }}
+
+            .btn-orange {{
+                background: linear-gradient(180deg, #fbbf24 0%, #f59e0b 100%);
+                color: #1f2937;
+            }}
+
+            .card, .kpi, .compact-card, .chart-card, table {{
+                background: var(--jatune-card);
+                backdrop-filter: blur(10px);
+                border: 1px solid var(--jatune-border);
+                box-shadow: var(--jatune-shadow);
+            }}
 
             .card {{
-                background: #0f1b33;
-                padding: 12px;
-                border-radius: 12px;
-                margin-bottom: 12px;
+                padding: 14px;
+                border-radius: 18px;
+                margin-bottom: 14px;
             }}
+
             .grid {{
                 display: grid;
                 grid-template-columns: repeat(4, minmax(140px, 1fr));
+                gap: 12px;
+                margin-bottom: 14px;
+            }}
+
+            .kpi {{
+                padding: 14px;
+                border-radius: 18px;
+            }}
+
+            .kpi .label {{
+                color: #6B7280;
+                font-size: 12px;
+                font-weight: 700;
+            }}
+
+            .kpi .value {{
+                font-size: 28px;
+                font-weight: 900;
+                margin-top: 8px;
+                color: #111827;
+            }}
+
+            .mini-grid {{
+                display: grid;
+                grid-template-columns: repeat(3, minmax(120px, 1fr));
                 gap: 10px;
                 margin-bottom: 12px;
             }}
-            .kpi {{
-                background: #0f1b33;
+
+            .mini-kpi {{
+                background: rgba(255,255,255,0.82);
                 padding: 12px;
-                border-radius: 12px;
+                border-radius: 14px;
+                border: 1px solid rgba(250, 204, 21, 0.18);
             }}
-            .kpi .label {{
-                color: #9ca3af;
-                font-size: 12px;
+
+            .mini-kpi .label {{
+                color: #6B7280;
+                font-size: 11px;
+                font-weight: 700;
             }}
-            .kpi .value {{
-                font-size: 24px;
-                font-weight: bold;
-                margin-top: 6px;
+
+            .mini-kpi .value {{
+                font-size: 21px;
+                font-weight: 900;
+                margin-top: 4px;
+                color: #111827;
             }}
+
             table {{
                 width: 100%;
-                border-collapse: collapse;
-                background: #0f1b33;
-                border-radius: 12px;
+                border-collapse: separate;
+                border-spacing: 0;
+                border-radius: 18px;
                 overflow: hidden;
-                margin-bottom: 12px;
+                margin-bottom: 14px;
             }}
+
             th, td {{
-                padding: 10px;
-                border-bottom: 1px solid #1f2937;
+                padding: 11px 12px;
+                border-bottom: 1px solid rgba(15, 23, 42, 0.06);
                 text-align: left;
                 font-size: 13px;
+                color: #1F2937;
             }}
+
             th {{
-                background: #1a2740;
+                background: rgba(250, 204, 21, 0.18);
+                color: #6B7280;
+                font-weight: 800;
             }}
-            .ok {{ color: #22c55e; font-weight: bold; }}
-            .warn {{ color: #f59e0b; font-weight: bold; }}
-            .incident {{ color: #ef4444; font-weight: bold; }}
+
+            tr:last-child td {{
+                border-bottom: none;
+            }}
+
+            .ok {{
+                color: #15803d;
+                font-weight: 900;
+            }}
+
+            .warn {{
+                color: #b45309;
+                font-weight: 900;
+            }}
+
+            .incident {{
+                color: #dc2626;
+                font-weight: 900;
+            }}
+
             .hint {{
-                color: #9ca3af;
+                color: #6B7280;
                 font-size: 11px;
                 margin-top: 4px;
             }}
+
             code {{
-                background: #111827;
+                background: rgba(255,255,255,0.9);
                 padding: 2px 6px;
-                border-radius: 6px;
-                font-size: 11px;
-            }}
-            input, textarea, select {{
-                padding: 8px;
                 border-radius: 8px;
-                border: 1px solid #334155;
-                background: #0b1220;
-                color: white;
+                font-size: 11px;
+                color: #374151;
+                border: 1px solid rgba(15,23,42,0.05);
+            }}
+
+            input, textarea, select {{
+                padding: 9px 10px;
+                border-radius: 12px;
+                border: 1px solid rgba(15, 23, 42, 0.09);
+                background: rgba(255,255,255,0.9);
+                color: #111827;
                 width: 100%;
-                box-sizing: border-box;
                 font-size: 13px;
             }}
+
             textarea {{
-                min-height: 68px;
+                min-height: 72px;
+                resize: vertical;
             }}
+
             .inline-form {{
                 display: flex;
                 gap: 8px;
@@ -345,34 +498,62 @@ def render_layout(title, body_html):
                 align-items: center;
                 margin-top: 8px;
             }}
+
             .monitor-layout {{
                 display: grid;
                 grid-template-columns: 220px 220px 1fr 220px;
-                gap: 10px;
-                margin-bottom: 12px;
+                gap: 12px;
+                margin-bottom: 14px;
                 align-items: start;
             }}
+
             .compact-card {{
-                background: #0f1b33;
-                padding: 12px;
-                border-radius: 12px;
+                padding: 14px;
+                border-radius: 18px;
             }}
+
             .compact-card h3 {{
                 margin: 0 0 8px 0;
                 font-size: 15px;
+                color: #111827;
             }}
+
             .chart-card {{
-                background: #0f1b33;
-                padding: 14px;
-                border-radius: 12px;
-                margin-bottom: 12px;
+                padding: 16px;
+                border-radius: 18px;
+                margin-bottom: 14px;
             }}
+
+            .section-title {{
+                margin: 0 0 8px 0;
+                font-size: 20px;
+                color: #111827;
+                letter-spacing: -0.2px;
+            }}
+
+            .subtle {{
+                color: #6B7280;
+                font-size: 12px;
+            }}
+
             @media (max-width: 1200px) {{
                 .grid {{
                     grid-template-columns: repeat(2, minmax(140px, 1fr));
                 }}
+                .mini-grid {{
+                    grid-template-columns: 1fr;
+                }}
                 .monitor-layout {{
                     grid-template-columns: 1fr;
+                }}
+            }}
+
+            @media (max-width: 768px) {{
+                .brand-left {{
+                    align-items: flex-start;
+                }}
+                .brand-copy h1 {{
+                    font-size: 22px;
                 }}
             }}
         </style>
@@ -405,18 +586,29 @@ def render_layout(title, body_html):
         </script>
     </head>
     <body>
-        <div class="topbar">
-            <h1 style="margin:0;">{title}</h1>
-            <div class="nav">
-                <a href="/">Monitor</a>
-                <a href="/analytics">Analytics</a>
-                <button class="btn btn-blue" onclick="window.location.reload()">Refrescar</button>
-                <button class="btn btn-green" onclick="runCheckAndReturn()">Correr chequeo</button>
-                <button class="btn btn-green" onclick="runCollectorAndReturn()">Correr collector</button>
-                <button class="btn btn-red" onclick="resetAll()">Borrar todo</button>
+        <div class="shell">
+            <div class="brandbar">
+                <div class="brand-left">
+                    <img src="/static/watch_eagle.png" alt="JATune" class="brand-logo">
+                    <div class="brand-copy">
+                        <h1>{title}</h1>
+                        <div class="sub">Centro analítico musical • JaTune Intelligence</div>
+                        <div class="brand-badge">JATune</div>
+                    </div>
+                </div>
+
+                <div class="nav">
+                    <a href="/">Monitor</a>
+                    <a href="/analytics">Analytics</a>
+                    <button class="btn btn-blue" onclick="window.location.reload()">Refrescar</button>
+                    <button class="btn btn-green" onclick="runCheckAndReturn()">Correr chequeo</button>
+                    <button class="btn btn-green" onclick="runCollectorAndReturn()">Correr collector</button>
+                    <button class="btn btn-red" onclick="resetAll()">Borrar todo</button>
+                </div>
             </div>
+
+            {body_html}
         </div>
-        {body_html}
     </body>
     </html>
     """
@@ -570,6 +762,11 @@ def home():
         </div>
     </div>
 
+    <div class="card">
+        <h2 class="section-title">Vista operativa</h2>
+        <div class="subtle">Monitoreo central de equipos y pausas de reproducción.</div>
+    </div>
+
     <table>
         <thead>
             <tr>
@@ -642,6 +839,34 @@ def analytics():
     plays_yesterday = cur.fetchone()["c"]
 
     diff = plays_today - plays_yesterday
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM scrobbles
+        WHERE date_trunc('month', scrobbled_at) = date_trunc('month', CURRENT_DATE)
+        {where_sql}
+    """, params)
+    month_current_total = cur.fetchone()["c"]
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM scrobbles
+        WHERE date_trunc('month', scrobbled_at) = date_trunc('month', CURRENT_DATE - INTERVAL '1 month')
+        {where_sql}
+    """, params)
+    month_previous_total = cur.fetchone()["c"]
+
+    month_diff = month_current_total - month_previous_total
+
+    cur.execute(f"""
+        SELECT
+            COALESCE(SUM(CASE WHEN LOWER(app_name) = 'spotify' THEN 1 ELSE 0 END), 0) AS spotify_total,
+            COALESCE(SUM(CASE WHEN LOWER(app_name) = 'tidal' THEN 1 ELSE 0 END), 0) AS tidal_total,
+            COALESCE(SUM(CASE WHEN LOWER(app_name) = 'apple' OR LOWER(app_name) = 'apple music' THEN 1 ELSE 0 END), 0) AS apple_total
+        FROM scrobbles
+        WHERE 1=1 {where_sql}
+    """, params)
+    app_totals = cur.fetchone()
 
     cur.execute(f"""
         SELECT COALESCE(artist, '-') AS artist, COUNT(*) AS plays
@@ -780,13 +1005,40 @@ def analytics():
         </div>
     </div>
 
+    <div class="grid" style="grid-template-columns:2fr 1fr;">
+        <div class="kpi">
+            <div class="label">Mes actual vs mes anterior</div>
+            <div class="value">{month_current_total} / {month_previous_total}</div>
+            <div class="hint">Variación mensual: {month_diff}</div>
+        </div>
+
+        <div class="card" style="margin-bottom:0;">
+            <div class="label" style="color:#6B7280;font-size:12px;margin-bottom:8px;">Reproducciones por app (según filtros)</div>
+            <div class="mini-grid">
+                <div class="mini-kpi">
+                    <div class="label">Spotify</div>
+                    <div class="value">{app_totals['spotify_total']}</div>
+                </div>
+                <div class="mini-kpi">
+                    <div class="label">Tidal</div>
+                    <div class="value">{app_totals['tidal_total']}</div>
+                </div>
+                <div class="mini-kpi">
+                    <div class="label">Apple</div>
+                    <div class="value">{app_totals['apple_total']}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="chart-card">
-        <h2 style="margin-top:0;">Tendencia diaria de reproducciones</h2>
+        <h2 class="section-title">Tendencia diaria de reproducciones</h2>
+        <div class="subtle">Pulso diario consolidado del consumo musical.</div>
         <canvas id="dailyLineChart" height="95"></canvas>
     </div>
 
     <div class="card">
-        <h2>Top artistas</h2>
+        <h2 class="section-title">Top artistas</h2>
         <table>
             <thead><tr><th>Artista</th><th>Plays</th></tr></thead>
             <tbody>{rows_simple(top_artists, ['artist', 'plays']) if top_artists else '<tr><td colspan="2">Sin datos</td></tr>'}</tbody>
@@ -794,7 +1046,7 @@ def analytics():
     </div>
 
     <div class="card">
-        <h2>Top canciones</h2>
+        <h2 class="section-title">Top canciones</h2>
         <table>
             <thead><tr><th>Canción</th><th>Artista</th><th>Plays</th></tr></thead>
             <tbody>{rows_simple(top_tracks, ['track', 'artist', 'plays']) if top_tracks else '<tr><td colspan="3">Sin datos</td></tr>'}</tbody>
@@ -802,7 +1054,7 @@ def analytics():
     </div>
 
     <div class="card">
-        <h2>Comparativa artistas: hoy vs ayer</h2>
+        <h2 class="section-title">Comparativa artistas: hoy vs ayer</h2>
         <table>
             <thead><tr><th>Artista</th><th>Hoy</th><th>Ayer</th></tr></thead>
             <tbody>{rows_simple(compare_artists, ['artist', 'hoy', 'ayer']) if compare_artists else '<tr><td colspan="3">Sin datos</td></tr>'}</tbody>
@@ -810,7 +1062,7 @@ def analytics():
     </div>
 
     <div class="card">
-        <h2>Plays por equipo</h2>
+        <h2 class="section-title">Plays por equipo</h2>
         <table>
             <thead><tr><th>Equipo</th><th>Plays</th></tr></thead>
             <tbody>{rows_simple(plays_by_team, ['team_name', 'plays']) if plays_by_team else '<tr><td colspan="2">Sin datos</td></tr>'}</tbody>
@@ -818,7 +1070,7 @@ def analytics():
     </div>
 
     <div class="card">
-        <h2>Plays por app</h2>
+        <h2 class="section-title">Plays por app</h2>
         <table>
             <thead><tr><th>App</th><th>Plays</th></tr></thead>
             <tbody>{rows_simple(plays_by_app, ['app_name', 'plays']) if plays_by_app else '<tr><td colspan="2">Sin datos</td></tr>'}</tbody>
@@ -826,7 +1078,7 @@ def analytics():
     </div>
 
     <div class="card">
-        <h2>Reproducciones cada 30 minutos (últimas 24h)</h2>
+        <h2 class="section-title">Reproducciones cada 30 minutos (últimas 24h)</h2>
         <table>
             <thead><tr><th>Bloque</th><th>Plays</th></tr></thead>
             <tbody>{rows_simple(plays_30m, ['slot_30m', 'plays']) if plays_30m else '<tr><td colspan="2">Sin datos</td></tr>'}</tbody>
@@ -842,9 +1094,9 @@ def analytics():
                 datasets: [{{
                     label: 'Reproducciones por día',
                     data: {json.dumps(line_values)},
-                    borderColor: '#3b82f6',
-                    backgroundColor: 'rgba(59,130,246,0.15)',
-                    tension: 0.25,
+                    borderColor: '#FACC15',
+                    backgroundColor: 'rgba(250,204,21,0.18)',
+                    tension: 0.28,
                     fill: true
                 }}]
             }},
@@ -853,18 +1105,18 @@ def analytics():
                 plugins: {{
                     legend: {{
                         labels: {{
-                            color: '#e5e7eb'
+                            color: '#374151'
                         }}
                     }}
                 }},
                 scales: {{
                     x: {{
-                        ticks: {{ color: '#e5e7eb' }},
-                        grid: {{ color: '#1f2937' }}
+                        ticks: {{ color: '#4B5563' }},
+                        grid: {{ color: 'rgba(15,23,42,0.08)' }}
                     }},
                     y: {{
-                        ticks: {{ color: '#e5e7eb' }},
-                        grid: {{ color: '#1f2937' }}
+                        ticks: {{ color: '#4B5563' }},
+                        grid: {{ color: 'rgba(15,23,42,0.08)' }}
                     }}
                 }}
             }}
@@ -958,12 +1210,12 @@ def import_real_teams():
         </div>
 
         <div class="card">
-            <h2>Creados</h2>
+            <h2 class="section-title">Creados</h2>
             <pre>{created}</pre>
         </div>
 
         <div class="card">
-            <h2>Omitidos</h2>
+            <h2 class="section-title">Omitidos</h2>
             <pre>{skipped}</pre>
         </div>
         """
