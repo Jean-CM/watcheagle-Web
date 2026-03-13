@@ -4,6 +4,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import subprocess
 import requests
+import json
 
 app = Flask(__name__)
 
@@ -30,10 +31,8 @@ def lastfm_user_exists(username: str) -> bool:
     try:
         r = requests.get(url, params=params, timeout=20)
         data = r.json()
-
         if "error" in data:
             return False
-
         return "user" in data
     except Exception:
         return False
@@ -43,7 +42,6 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # Teams
     cur.execute("""
     CREATE TABLE IF NOT EXISTS teams (
         id SERIAL PRIMARY KEY,
@@ -60,7 +58,6 @@ def init_db():
     );
     """)
 
-    # Scrobbles base
     cur.execute("""
     CREATE TABLE IF NOT EXISTS scrobbles (
         id SERIAL PRIMARY KEY,
@@ -76,7 +73,6 @@ def init_db():
     );
     """)
 
-    # Renombrar columnas viejas si existen
     cur.execute("""
     DO $$
     BEGIN
@@ -112,7 +108,6 @@ def init_db():
     END $$;
     """)
 
-    # Agregar columnas faltantes
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_id INTEGER;")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_name VARCHAR(100);")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS lastfm_user VARCHAR(100);")
@@ -123,12 +118,10 @@ def init_db():
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS scrobbled_at TIMESTAMP;")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
 
-    # Quitar NOT NULL heredado de esquemas viejos
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN artist DROP NOT NULL;")
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN track DROP NOT NULL;")
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN album DROP NOT NULL;")
 
-    # Índice único para evitar duplicados
     cur.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_scrobbles_unique
     ON scrobbles (lastfm_user, artist, track, scrobbled_at);
@@ -144,142 +137,175 @@ def render_layout(title, body_html):
     <html>
     <head>
         <title>{title}</title>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
             body {{
                 font-family: Arial, sans-serif;
-                background:#071226;
-                color:#e5e7eb;
-                padding:30px;
-                margin:0;
+                background: #071226;
+                color: #e5e7eb;
+                padding: 24px;
+                margin: 0;
             }}
             .topbar {{
-                display:flex;
-                justify-content:space-between;
-                align-items:center;
-                margin-bottom:18px;
-                gap:16px;
-                flex-wrap:wrap;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 16px;
+                gap: 16px;
+                flex-wrap: wrap;
             }}
             .nav {{
-                display:flex;
-                gap:10px;
-                flex-wrap:wrap;
+                display: flex;
+                gap: 10px;
+                flex-wrap: wrap;
             }}
             .nav a, .btn {{
-                background:#1a2740;
-                color:white;
-                text-decoration:none;
-                padding:10px 16px;
-                border-radius:8px;
-                display:inline-block;
-                border:none;
-                cursor:pointer;
-                font-weight:bold;
-                font-size:14px;
+                background: #1a2740;
+                color: white;
+                text-decoration: none;
+                padding: 10px 14px;
+                border-radius: 8px;
+                display: inline-block;
+                border: none;
+                cursor: pointer;
+                font-weight: bold;
+                font-size: 14px;
             }}
-            .btn-green {{ background:#16a34a; }}
-            .btn-blue {{ background:#2563eb; }}
-            .btn-red {{ background:#dc2626; }}
-            .btn-orange {{ background:#ea580c; }}
+            .btn-green {{ background: #16a34a; }}
+            .btn-blue {{ background: #2563eb; }}
+            .btn-red {{ background: #dc2626; }}
+            .btn-orange {{ background: #ea580c; }}
 
             .card {{
-                background:#0f1b33;
-                padding:18px;
-                border-radius:12px;
-                margin-bottom:18px;
+                background: #0f1b33;
+                padding: 16px;
+                border-radius: 12px;
+                margin-bottom: 16px;
             }}
+
             .grid {{
-                display:grid;
-                grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
-                gap:16px;
-                margin-bottom:18px;
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                gap: 14px;
+                margin-bottom: 16px;
             }}
+
             .kpi {{
-                background:#0f1b33;
-                padding:18px;
-                border-radius:12px;
+                background: #0f1b33;
+                padding: 16px;
+                border-radius: 12px;
             }}
             .kpi .label {{
-                color:#9ca3af;
-                font-size:14px;
+                color: #9ca3af;
+                font-size: 13px;
             }}
             .kpi .value {{
-                font-size:28px;
-                font-weight:bold;
-                margin-top:8px;
+                font-size: 28px;
+                font-weight: bold;
+                margin-top: 8px;
             }}
+
             table {{
-                width:100%;
-                border-collapse:collapse;
-                background:#0f1b33;
-                border-radius:12px;
-                overflow:hidden;
-                margin-bottom:18px;
+                width: 100%;
+                border-collapse: collapse;
+                background: #0f1b33;
+                border-radius: 12px;
+                overflow: hidden;
+                margin-bottom: 16px;
             }}
             th, td {{
-                padding:12px;
-                border-bottom:1px solid #1f2937;
-                text-align:left;
-                font-size:14px;
+                padding: 12px;
+                border-bottom: 1px solid #1f2937;
+                text-align: left;
+                font-size: 14px;
             }}
             th {{
-                background:#1a2740;
+                background: #1a2740;
             }}
-            .ok {{ color:#22c55e; font-weight:bold; }}
-            .warn {{ color:#f59e0b; font-weight:bold; }}
-            .incident {{ color:#ef4444; font-weight:bold; }}
+
+            .ok {{ color: #22c55e; font-weight: bold; }}
+            .warn {{ color: #f59e0b; font-weight: bold; }}
+            .incident {{ color: #ef4444; font-weight: bold; }}
+
             .hint {{
-                color:#9ca3af;
-                font-size:13px;
-                margin-top:6px;
+                color: #9ca3af;
+                font-size: 12px;
+                margin-top: 6px;
             }}
+
             code {{
-                background:#111827;
-                padding:2px 6px;
-                border-radius:6px;
-                font-size:12px;
+                background: #111827;
+                padding: 2px 6px;
+                border-radius: 6px;
+                font-size: 12px;
             }}
-            input, textarea {{
-                padding:10px;
-                border-radius:8px;
-                border:1px solid #334155;
-                background:#0b1220;
-                color:white;
-                width:100%;
-                box-sizing:border-box;
-                font-size:14px;
+
+            input, textarea, select {{
+                padding: 10px;
+                border-radius: 8px;
+                border: 1px solid #334155;
+                background: #0b1220;
+                color: white;
+                width: 100%;
+                box-sizing: border-box;
+                font-size: 14px;
             }}
+
             textarea {{
-                min-height:100px;
+                min-height: 88px;
             }}
+
             .inline-form {{
-                display:flex;
-                gap:10px;
-                flex-wrap:wrap;
-                align-items:center;
-                margin-top:10px;
+                display: flex;
+                gap: 10px;
+                flex-wrap: wrap;
+                align-items: center;
+                margin-top: 10px;
             }}
-            .quick-row {{
+
+            .quick-grid {{
+                display: grid;
+                grid-template-columns: 240px 1fr 240px;
+                gap: 14px;
+                margin-bottom: 16px;
+            }}
+
+            .compact-card {{
+                background: #0f1b33;
+                padding: 14px;
+                border-radius: 12px;
+            }}
+
+            .compact-card h3 {{
+                margin: 0 0 10px 0;
+                font-size: 17px;
+            }}
+
+            .filters {{
                 display:grid;
-                grid-template-columns:320px 1fr;
-                gap:16px;
+                grid-template-columns: 220px 220px auto;
+                gap: 12px;
+                align-items:end;
+                margin-bottom: 16px;
+            }}
+
+            .chart-card {{
+                background:#0f1b33;
+                padding:16px;
+                border-radius:12px;
                 margin-bottom:16px;
             }}
-            .compact-card {{
-                background:#0f1b33;
-                padding:14px;
-                border-radius:12px;
-            }}
-            .compact-card h3 {{
-                margin:0 0 10px 0;
-                font-size:18px;
-            }}
-            @media (max-width: 900px) {{
-                .quick-row {{
-                    grid-template-columns:1fr;
+
+            @media (max-width: 1100px) {{
+                .quick-grid {{
+                    grid-template-columns: 1fr;
+                }}
+                .filters {{
+                    grid-template-columns: 1fr;
                 }}
             }}
         </style>
+
         <script>
             function deleteById() {{
                 const id = document.getElementById('deleteId').value;
@@ -297,6 +323,14 @@ def render_layout(title, body_html):
                     window.location.href = '/reset-teams';
                 }}
             }}
+
+            function runCollectorAndReturn() {{
+                window.open('/run-collector', '_blank');
+            }}
+
+            function runCheckAndReturn() {{
+                window.open('/run-check', '_blank');
+            }}
         </script>
     </head>
     <body>
@@ -306,8 +340,8 @@ def render_layout(title, body_html):
                 <a href="/">Monitor</a>
                 <a href="/analytics">Analytics</a>
                 <button class="btn btn-blue" onclick="window.location.reload()">Refrescar</button>
-                <a class="btn btn-green" href="/run-check">Correr chequeo</a>
-                <a class="btn btn-green" href="/run-collector">Correr collector</a>
+                <button class="btn btn-green" onclick="runCheckAndReturn()">Correr chequeo</button>
+                <button class="btn btn-green" onclick="runCollectorAndReturn()">Correr collector</button>
                 <button class="btn btn-red" onclick="resetAll()">Borrar todo</button>
             </div>
         </div>
@@ -325,8 +359,18 @@ def home():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT id, name, app_name, lastfm_user, status,
-               idle_minutes, last_scrobble_at, last_check_at
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE status = 'OK') AS ok_count,
+            COUNT(*) FILTER (WHERE status = 'WARN') AS warn_count,
+            COUNT(*) FILTER (WHERE status = 'INCIDENT') AS incident_count
+        FROM teams
+        WHERE active = TRUE
+    """)
+    summary = cur.fetchone()
+
+    cur.execute("""
+        SELECT id, name, app_name, lastfm_user, status, idle_minutes
         FROM teams
         WHERE active = TRUE
         ORDER BY id ASC
@@ -354,26 +398,35 @@ def home():
             <td>{t['app_name']}</td>
             <td>{t['lastfm_user']}</td>
             <td class="{estado_class}">{estado}</td>
-            <td>{t['last_scrobble_at'] or '-'}</td>
             <td>{t['idle_minutes']}</td>
-            <td>{t['last_check_at'] or '-'}</td>
         </tr>
         """
 
     body = f"""
-    <div class="card">
-        <p><strong>Monitores activos:</strong> {len(teams)}</p>
-        <p class="hint">Borrar todo + reiniciar IDs: <code>/reset-teams</code></p>
-        <p class="hint">Eliminar un equipo: <code>/delete-team?id=7</code></p>
-        <p class="hint">Carga simple: <code>/load-teams?total=100&prefix=equipo&app=spotify</code></p>
-        <p class="hint">Carga por bloques: <code>/load-batch?spotify=40&tidal=30&apple=30</code></p>
+    <div class="grid">
+        <div class="kpi">
+            <div class="label">Equipos activos</div>
+            <div class="value">{summary['total'] or 0}</div>
+        </div>
+        <div class="kpi">
+            <div class="label">🟢 OK</div>
+            <div class="value">{summary['ok_count'] or 0}</div>
+        </div>
+        <div class="kpi">
+            <div class="label">🟡 WARN</div>
+            <div class="value">{summary['warn_count'] or 0}</div>
+        </div>
+        <div class="kpi">
+            <div class="label">🔴 INCIDENT</div>
+            <div class="value">{summary['incident_count'] or 0}</div>
+        </div>
     </div>
 
-    <div class="quick-row">
+    <div class="quick-grid">
         <div class="compact-card">
             <h3>Eliminar por ID</h3>
+            <input id="deleteId" type="number" placeholder="ID a borrar">
             <div class="inline-form">
-                <input id="deleteId" type="number" placeholder="ID a borrar">
                 <button class="btn btn-orange" onclick="deleteById()">Eliminar</button>
             </div>
         </div>
@@ -381,16 +434,20 @@ def home():
         <div class="compact-card">
             <h3>Importar equipos reales de Last.fm</h3>
             <p class="hint">Formato: <code>Nombre visible,app,usuario_real_lastfm</code></p>
-            <p class="hint">Ejemplo:<br>
-            <code>Equipo 01,spotify,JeanCMP</code><br>
-            <code>equipoG01,spotify,equipoG01</code></p>
-
             <form method="POST" action="/import-real-teams">
                 <textarea name="lines" placeholder="Equipo 01,spotify,JeanCMP&#10;equipoG01,spotify,equipoG01"></textarea>
                 <div class="inline-form">
                     <button class="btn btn-green" type="submit">Importar usuarios válidos</button>
                 </div>
             </form>
+        </div>
+
+        <div class="compact-card">
+            <h3>Acciones rápidas</h3>
+            <p class="hint"><code>/run-check</code></p>
+            <p class="hint"><code>/run-collector</code></p>
+            <p class="hint"><code>/analytics</code></p>
+            <p class="hint"><code>/debug-lastfm?user=JeanCMP</code></p>
         </div>
     </div>
 
@@ -402,13 +459,11 @@ def home():
                 <th>App</th>
                 <th>Usuario Last.fm</th>
                 <th>Estado</th>
-                <th>Último scrobble</th>
-                <th>Idle</th>
-                <th>Último check</th>
+                <th>Min pausado</th>
             </tr>
         </thead>
         <tbody>
-            {rows if rows else '<tr><td colspan="8">No hay equipos cargados</td></tr>'}
+            {rows if rows else '<tr><td colspan="6">No hay equipos cargados</td></tr>'}
         </tbody>
     </table>
     """
@@ -419,69 +474,109 @@ def home():
 def analytics():
     init_db()
 
+    app_filter = request.args.get("app", "all")
+    month_filter = request.args.get("month", "all")
+
     conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute("SELECT COUNT(*) AS c FROM scrobbles WHERE DATE(scrobbled_at) = CURRENT_DATE")
+    where_clauses = []
+    params = []
+
+    if app_filter != "all":
+        where_clauses.append("app_name = %s")
+        params.append(app_filter)
+
+    if month_filter != "all":
+        where_clauses.append("to_char(scrobbled_at, 'YYYY-MM') = %s")
+        params.append(month_filter)
+
+    where_sql = ""
+    if where_clauses:
+        where_sql = " AND " + " AND ".join(where_clauses)
+
+    cur.execute("SELECT DISTINCT app_name FROM scrobbles WHERE app_name IS NOT NULL ORDER BY app_name")
+    apps = cur.fetchall()
+
+    cur.execute("""
+        SELECT DISTINCT to_char(scrobbled_at, 'YYYY-MM') AS month_key
+        FROM scrobbles
+        WHERE scrobbled_at IS NOT NULL
+        ORDER BY month_key DESC
+    """)
+    months = cur.fetchall()
+
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM scrobbles
+        WHERE DATE(scrobbled_at) = CURRENT_DATE
+        {where_sql}
+    """, params)
     plays_today = cur.fetchone()["c"]
 
-    cur.execute("SELECT COUNT(*) AS c FROM scrobbles WHERE DATE(scrobbled_at) = CURRENT_DATE - INTERVAL '1 day'")
+    cur.execute(f"""
+        SELECT COUNT(*) AS c
+        FROM scrobbles
+        WHERE DATE(scrobbled_at) = CURRENT_DATE - INTERVAL '1 day'
+        {where_sql}
+    """, params)
     plays_yesterday = cur.fetchone()["c"]
 
     diff = plays_today - plays_yesterday
 
-    cur.execute("""
+    cur.execute(f"""
         SELECT COALESCE(artist, '-') AS artist, COUNT(*) AS plays
         FROM scrobbles
-        WHERE DATE(scrobbled_at) = CURRENT_DATE
+        WHERE 1=1 {where_sql}
         GROUP BY artist
         ORDER BY plays DESC
         LIMIT 10
-    """)
+    """, params)
     top_artists = cur.fetchall()
 
-    cur.execute("""
+    cur.execute(f"""
         SELECT COALESCE(track, '-') AS track, COALESCE(artist, '-') AS artist, COUNT(*) AS plays
         FROM scrobbles
-        WHERE DATE(scrobbled_at) = CURRENT_DATE
+        WHERE 1=1 {where_sql}
         GROUP BY track, artist
         ORDER BY plays DESC
         LIMIT 10
-    """)
+    """, params)
     top_tracks = cur.fetchall()
 
-    cur.execute("""
+    cur.execute(f"""
         SELECT COALESCE(team_name, '-') AS team_name, COUNT(*) AS plays
         FROM scrobbles
-        WHERE DATE(scrobbled_at) = CURRENT_DATE
+        WHERE 1=1 {where_sql}
         GROUP BY team_name
         ORDER BY plays DESC
         LIMIT 15
-    """)
+    """, params)
     plays_by_team = cur.fetchall()
 
-    cur.execute("""
+    cur.execute(f"""
         SELECT COALESCE(app_name, '-') AS app_name, COUNT(*) AS plays
         FROM scrobbles
-        WHERE DATE(scrobbled_at) = CURRENT_DATE
+        WHERE 1=1 {where_sql}
         GROUP BY app_name
         ORDER BY plays DESC
-    """)
+    """, params)
     plays_by_app = cur.fetchall()
 
-    cur.execute("""
+    cur.execute(f"""
         SELECT
             COALESCE(artist, '-') AS artist,
             SUM(CASE WHEN DATE(scrobbled_at) = CURRENT_DATE THEN 1 ELSE 0 END) AS hoy,
             SUM(CASE WHEN DATE(scrobbled_at) = CURRENT_DATE - INTERVAL '1 day' THEN 1 ELSE 0 END) AS ayer
         FROM scrobbles
+        WHERE 1=1 {where_sql}
         GROUP BY artist
         ORDER BY hoy DESC, ayer DESC
         LIMIT 15
-    """)
+    """, params)
     compare_artists = cur.fetchall()
 
-    cur.execute("""
+    cur.execute(f"""
         SELECT
             to_char(
                 date_trunc('hour', scrobbled_at)
@@ -491,14 +586,29 @@ def analytics():
             COUNT(*) AS plays
         FROM scrobbles
         WHERE scrobbled_at >= NOW() - INTERVAL '24 hours'
+        {where_sql}
         GROUP BY 1
         ORDER BY 1 DESC
         LIMIT 24
-    """)
+    """, params)
     plays_30m = cur.fetchall()
+
+    cur.execute(f"""
+        SELECT
+            to_char(DATE(scrobbled_at), 'YYYY-MM-DD') AS day_label,
+            COUNT(*) AS plays
+        FROM scrobbles
+        WHERE 1=1 {where_sql}
+        GROUP BY DATE(scrobbled_at)
+        ORDER BY DATE(scrobbled_at) ASC
+    """, params)
+    daily_line = cur.fetchall()
 
     cur.close()
     conn.close()
+
+    line_labels = [x["day_label"] for x in daily_line]
+    line_values = [x["plays"] for x in daily_line]
 
     def rows_simple(items, cols):
         html = ""
@@ -506,7 +616,31 @@ def analytics():
             html += "<tr>" + "".join(f"<td>{item[col] or '-'}</td>" for col in cols) + "</tr>"
         return html
 
+    app_options = '<option value="all">Todas</option>'
+    for a in apps:
+        selected = "selected" if a["app_name"] == app_filter else ""
+        app_options += f'<option value="{a["app_name"]}" {selected}>{a["app_name"]}</option>'
+
+    month_options = '<option value="all">Todos</option>'
+    for m in months:
+        selected = "selected" if m["month_key"] == month_filter else ""
+        month_options += f'<option value="{m["month_key"]}" {selected}>{m["month_key"]}</option>'
+
     body = f"""
+    <form method="GET" action="/analytics" class="filters">
+        <div class="card" style="margin-bottom:0;">
+            <div class="hint">Filtrar por app</div>
+            <select name="app">{app_options}</select>
+        </div>
+        <div class="card" style="margin-bottom:0;">
+            <div class="hint">Filtrar por mes</div>
+            <select name="month">{month_options}</select>
+        </div>
+        <div class="card" style="margin-bottom:0;display:flex;align-items:end;">
+            <button class="btn btn-blue" type="submit">Aplicar filtros</button>
+        </div>
+    </form>
+
     <div class="grid">
         <div class="kpi">
             <div class="label">Plays hoy</div>
@@ -522,8 +656,13 @@ def analytics():
         </div>
     </div>
 
+    <div class="chart-card">
+        <h2 style="margin-top:0;">Tendencia diaria de reproducciones</h2>
+        <canvas id="dailyLineChart" height="110"></canvas>
+    </div>
+
     <div class="card">
-        <h2>Top artistas hoy</h2>
+        <h2>Top artistas</h2>
         <table>
             <thead><tr><th>Artista</th><th>Plays</th></tr></thead>
             <tbody>{rows_simple(top_artists, ['artist', 'plays']) if top_artists else '<tr><td colspan="2">Sin datos</td></tr>'}</tbody>
@@ -531,7 +670,7 @@ def analytics():
     </div>
 
     <div class="card">
-        <h2>Top canciones hoy</h2>
+        <h2>Top canciones</h2>
         <table>
             <thead><tr><th>Canción</th><th>Artista</th><th>Plays</th></tr></thead>
             <tbody>{rows_simple(top_tracks, ['track', 'artist', 'plays']) if top_tracks else '<tr><td colspan="3">Sin datos</td></tr>'}</tbody>
@@ -547,7 +686,7 @@ def analytics():
     </div>
 
     <div class="card">
-        <h2>Plays por equipo hoy</h2>
+        <h2>Plays por equipo</h2>
         <table>
             <thead><tr><th>Equipo</th><th>Plays</th></tr></thead>
             <tbody>{rows_simple(plays_by_team, ['team_name', 'plays']) if plays_by_team else '<tr><td colspan="2">Sin datos</td></tr>'}</tbody>
@@ -555,7 +694,7 @@ def analytics():
     </div>
 
     <div class="card">
-        <h2>Plays por app hoy</h2>
+        <h2>Plays por app</h2>
         <table>
             <thead><tr><th>App</th><th>Plays</th></tr></thead>
             <tbody>{rows_simple(plays_by_app, ['app_name', 'plays']) if plays_by_app else '<tr><td colspan="2">Sin datos</td></tr>'}</tbody>
@@ -569,6 +708,44 @@ def analytics():
             <tbody>{rows_simple(plays_30m, ['slot_30m', 'plays']) if plays_30m else '<tr><td colspan="2">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
+
+    <script>
+        const ctx = document.getElementById('dailyLineChart').getContext('2d');
+        new Chart(ctx, {{
+            type: 'line',
+            data: {{
+                labels: {json.dumps(line_labels)},
+                datasets: [{{
+                    label: 'Reproducciones por día',
+                    data: {json.dumps(line_values)},
+                    borderColor: '#3b82f6',
+                    backgroundColor: 'rgba(59,130,246,0.15)',
+                    tension: 0.25,
+                    fill: true
+                }}]
+            }},
+            options: {{
+                responsive: true,
+                plugins: {{
+                    legend: {{
+                        labels: {{
+                            color: '#e5e7eb'
+                        }}
+                    }}
+                }},
+                scales: {{
+                    x: {{
+                        ticks: {{ color: '#e5e7eb' }},
+                        grid: {{ color: '#1f2937' }}
+                    }},
+                    y: {{
+                        ticks: {{ color: '#e5e7eb' }},
+                        grid: {{ color: '#1f2937' }}
+                    }}
+                }}
+            }}
+        }});
+    </script>
     """
     return render_layout("WatchEagle Analytics", body)
 
@@ -733,7 +910,6 @@ def reset_teams():
 
     cur.execute("DELETE FROM scrobbles;")
     cur.execute("DELETE FROM teams;")
-
     cur.execute("ALTER SEQUENCE IF EXISTS scrobbles_id_seq RESTART WITH 1;")
     cur.execute("ALTER SEQUENCE IF EXISTS teams_id_seq RESTART WITH 1;")
 
