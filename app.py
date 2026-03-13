@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -42,6 +42,7 @@ def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
+    # ===== teams =====
     cur.execute("""
     CREATE TABLE IF NOT EXISTS teams (
         id SERIAL PRIMARY KEY,
@@ -58,6 +59,7 @@ def init_db():
     );
     """)
 
+    # ===== scrobbles =====
     cur.execute("""
     CREATE TABLE IF NOT EXISTS scrobbles (
         id SERIAL PRIMARY KEY,
@@ -73,9 +75,22 @@ def init_db():
     );
     """)
 
+    # Agregar columnas nuevas si faltan
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_id INTEGER;")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_name VARCHAR(100);")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS lastfm_user VARCHAR(100);")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS app_name VARCHAR(50);")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS artist VARCHAR(255);")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS track VARCHAR(255);")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS album VARCHAR(255);")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS scrobbled_at TIMESTAMP;")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+
+    # Resolver esquemas viejos
     cur.execute("""
     DO $$
     BEGIN
+        -- Si existe artist_name y NO existe artist, renombrar
         IF EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_name='scrobbles' AND column_name='artist_name'
@@ -86,6 +101,7 @@ def init_db():
             ALTER TABLE scrobbles RENAME COLUMN artist_name TO artist;
         END IF;
 
+        -- Si existe track_name y NO existe track, renombrar
         IF EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_name='scrobbles' AND column_name='track_name'
@@ -96,6 +112,7 @@ def init_db():
             ALTER TABLE scrobbles RENAME COLUMN track_name TO track;
         END IF;
 
+        -- Si existe album_name y NO existe album, renombrar
         IF EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_name='scrobbles' AND column_name='album_name'
@@ -108,20 +125,48 @@ def init_db():
     END $$;
     """)
 
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_id INTEGER;")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_name VARCHAR(100);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS lastfm_user VARCHAR(100);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS app_name VARCHAR(50);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS artist VARCHAR(255);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS track VARCHAR(255);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS album VARCHAR(255);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS scrobbled_at TIMESTAMP;")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+    # Si las columnas viejas siguen existiendo, copiar datos y quitar NOT NULL
+    cur.execute("""
+    DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='artist_name'
+        ) THEN
+            UPDATE scrobbles
+            SET artist = COALESCE(artist, artist_name)
+            WHERE artist IS NULL;
+            ALTER TABLE scrobbles ALTER COLUMN artist_name DROP NOT NULL;
+        END IF;
 
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='track_name'
+        ) THEN
+            UPDATE scrobbles
+            SET track = COALESCE(track, track_name)
+            WHERE track IS NULL;
+            ALTER TABLE scrobbles ALTER COLUMN track_name DROP NOT NULL;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='album_name'
+        ) THEN
+            UPDATE scrobbles
+            SET album = COALESCE(album, album_name)
+            WHERE album IS NULL;
+            ALTER TABLE scrobbles ALTER COLUMN album_name DROP NOT NULL;
+        END IF;
+    END $$;
+    """)
+
+    # Quitar NOT NULL heredados en columnas nuevas
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN artist DROP NOT NULL;")
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN track DROP NOT NULL;")
     cur.execute("ALTER TABLE scrobbles ALTER COLUMN album DROP NOT NULL;")
 
+    # Índice único para evitar duplicados
     cur.execute("""
     CREATE UNIQUE INDEX IF NOT EXISTS idx_scrobbles_unique
     ON scrobbles (lastfm_user, artist, track, scrobbled_at);
@@ -143,34 +188,38 @@ def render_layout(title, body_html):
                 font-family: Arial, sans-serif;
                 background: #071226;
                 color: #e5e7eb;
-                padding: 24px;
+                padding: 20px;
                 margin: 0;
             }}
+
             .topbar {{
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                margin-bottom: 16px;
-                gap: 16px;
+                margin-bottom: 14px;
+                gap: 12px;
                 flex-wrap: wrap;
             }}
+
             .nav {{
                 display: flex;
-                gap: 10px;
+                gap: 8px;
                 flex-wrap: wrap;
             }}
+
             .nav a, .btn {{
                 background: #1a2740;
                 color: white;
                 text-decoration: none;
-                padding: 10px 14px;
+                padding: 9px 13px;
                 border-radius: 8px;
                 display: inline-block;
                 border: none;
                 cursor: pointer;
                 font-weight: bold;
-                font-size: 14px;
+                font-size: 13px;
             }}
+
             .btn-green {{ background: #16a34a; }}
             .btn-blue {{ background: #2563eb; }}
             .btn-red {{ background: #dc2626; }}
@@ -178,29 +227,31 @@ def render_layout(title, body_html):
 
             .card {{
                 background: #0f1b33;
-                padding: 16px;
+                padding: 14px;
                 border-radius: 12px;
-                margin-bottom: 16px;
+                margin-bottom: 14px;
             }}
 
             .grid {{
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-                gap: 14px;
-                margin-bottom: 16px;
+                grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+                gap: 12px;
+                margin-bottom: 14px;
             }}
 
             .kpi {{
                 background: #0f1b33;
-                padding: 16px;
+                padding: 14px;
                 border-radius: 12px;
             }}
+
             .kpi .label {{
                 color: #9ca3af;
-                font-size: 13px;
+                font-size: 12px;
             }}
+
             .kpi .value {{
-                font-size: 28px;
+                font-size: 26px;
                 font-weight: bold;
                 margin-top: 8px;
             }}
@@ -211,14 +262,16 @@ def render_layout(title, body_html):
                 background: #0f1b33;
                 border-radius: 12px;
                 overflow: hidden;
-                margin-bottom: 16px;
+                margin-bottom: 14px;
             }}
+
             th, td {{
-                padding: 12px;
+                padding: 10px;
                 border-bottom: 1px solid #1f2937;
                 text-align: left;
-                font-size: 14px;
+                font-size: 13px;
             }}
+
             th {{
                 background: #1a2740;
             }}
@@ -230,70 +283,70 @@ def render_layout(title, body_html):
             .hint {{
                 color: #9ca3af;
                 font-size: 12px;
-                margin-top: 6px;
+                margin-top: 5px;
             }}
 
             code {{
                 background: #111827;
                 padding: 2px 6px;
                 border-radius: 6px;
-                font-size: 12px;
+                font-size: 11px;
             }}
 
             input, textarea, select {{
-                padding: 10px;
+                padding: 9px;
                 border-radius: 8px;
                 border: 1px solid #334155;
                 background: #0b1220;
                 color: white;
                 width: 100%;
                 box-sizing: border-box;
-                font-size: 14px;
+                font-size: 13px;
             }}
 
             textarea {{
-                min-height: 88px;
+                min-height: 78px;
             }}
 
             .inline-form {{
                 display: flex;
-                gap: 10px;
+                gap: 8px;
                 flex-wrap: wrap;
                 align-items: center;
-                margin-top: 10px;
+                margin-top: 8px;
             }}
 
             .quick-grid {{
                 display: grid;
-                grid-template-columns: 240px 1fr 240px;
-                gap: 14px;
-                margin-bottom: 16px;
+                grid-template-columns: 220px 1fr 220px;
+                gap: 12px;
+                margin-bottom: 14px;
             }}
 
             .compact-card {{
                 background: #0f1b33;
-                padding: 14px;
+                padding: 12px;
                 border-radius: 12px;
             }}
 
             .compact-card h3 {{
-                margin: 0 0 10px 0;
-                font-size: 17px;
+                margin: 0 0 8px 0;
+                font-size: 16px;
             }}
 
             .filters {{
-                display:grid;
-                grid-template-columns: 220px 220px auto;
-                gap: 12px;
-                align-items:end;
-                margin-bottom: 16px;
+                display: grid;
+                grid-template-columns: repeat(4, minmax(150px, 1fr));
+                gap: 10px;
+                align-items: end;
+                margin-bottom: 14px;
             }}
 
             .chart-card {{
-                background:#0f1b33;
-                padding:16px;
-                border-radius:12px;
-                margin-bottom:16px;
+                background: #0f1b33;
+                padding: 14px;
+                border-radius: 12px;
+                margin-bottom: 14px;
             }}
 
             @media (max-width: 1100px) {{
@@ -355,26 +408,50 @@ def render_layout(title, body_html):
 def home():
     init_db()
 
+    app_filter = request.args.get("app", "all")
+    status_filter = request.args.get("status", "all")
+
     conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
+        SELECT DISTINCT app_name
+        FROM teams
+        WHERE active = TRUE
+        ORDER BY app_name
+    """)
+    apps = cur.fetchall()
+
+    where_clauses = ["active = TRUE"]
+    params = []
+
+    if app_filter != "all":
+        where_clauses.append("app_name = %s")
+        params.append(app_filter)
+
+    if status_filter != "all":
+        where_clauses.append("status = %s")
+        params.append(status_filter)
+
+    where_sql = " AND ".join(where_clauses)
+
+    cur.execute(f"""
         SELECT
             COUNT(*) AS total,
             COUNT(*) FILTER (WHERE status = 'OK') AS ok_count,
             COUNT(*) FILTER (WHERE status = 'WARN') AS warn_count,
             COUNT(*) FILTER (WHERE status = 'INCIDENT') AS incident_count
         FROM teams
-        WHERE active = TRUE
-    """)
+        WHERE {where_sql}
+    """, params)
     summary = cur.fetchone()
 
-    cur.execute("""
+    cur.execute(f"""
         SELECT id, name, app_name, lastfm_user, status, idle_minutes
         FROM teams
-        WHERE active = TRUE
+        WHERE {where_sql}
         ORDER BY id ASC
-    """)
+    """, params)
     teams = cur.fetchall()
 
     cur.close()
@@ -402,6 +479,17 @@ def home():
         </tr>
         """
 
+    app_options = '<option value="all">Todas</option>'
+    for a in apps:
+        selected = "selected" if a["app_name"] == app_filter else ""
+        app_options += f'<option value="{a["app_name"]}" {selected}>{a["app_name"]}</option>'
+
+    status_options = ""
+    for opt in ["all", "OK", "WARN", "INCIDENT", "PENDING"]:
+        label = "Todos" if opt == "all" else opt
+        selected = "selected" if opt == status_filter else ""
+        status_options += f'<option value="{opt}" {selected}>{label}</option>'
+
     body = f"""
     <div class="grid">
         <div class="kpi">
@@ -422,6 +510,24 @@ def home():
         </div>
     </div>
 
+    <form method="GET" action="/" class="filters">
+        <div class="card" style="margin-bottom:0;">
+            <div class="hint">Filtrar por app</div>
+            <select name="app">{app_options}</select>
+        </div>
+        <div class="card" style="margin-bottom:0;">
+            <div class="hint">Filtrar por estado</div>
+            <select name="status">{status_options}</select>
+        </div>
+        <div class="card" style="margin-bottom:0; display:flex; align-items:end;">
+            <button class="btn btn-blue" type="submit">Aplicar filtros</button>
+        </div>
+        <div class="card" style="margin-bottom:0;">
+            <div class="hint">Atajo</div>
+            <code>/reset-teams</code>
+        </div>
+    </form>
+
     <div class="quick-grid">
         <div class="compact-card">
             <h3>Eliminar por ID</h3>
@@ -435,7 +541,7 @@ def home():
             <h3>Importar equipos reales de Last.fm</h3>
             <p class="hint">Formato: <code>Nombre visible,app,usuario_real_lastfm</code></p>
             <form method="POST" action="/import-real-teams">
-                <textarea name="lines" placeholder="Equipo 01,spotify,JeanCMP&#10;equipoG01,spotify,equipoG01"></textarea>
+                <textarea name="lines" placeholder="Equipo T01,tidal,equipoS01&#10;equipoG01,spotify,equipoG01"></textarea>
                 <div class="inline-form">
                     <button class="btn btn-green" type="submit">Importar usuarios válidos</button>
                 </div>
@@ -658,7 +764,7 @@ def analytics():
 
     <div class="chart-card">
         <h2 style="margin-top:0;">Tendencia diaria de reproducciones</h2>
-        <canvas id="dailyLineChart" height="110"></canvas>
+        <canvas id="dailyLineChart" height="100"></canvas>
     </div>
 
     <div class="card">
@@ -877,12 +983,11 @@ def delete_team():
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("DELETE FROM teams WHERE id=%s RETURNING id", (team_id,))
-    row = cur.fetchone()
     conn.commit()
     cur.close()
     conn.close()
 
-    return jsonify({"deleted": row})
+    return redirect("/")
 
 
 @app.route("/delete-many")
@@ -917,10 +1022,7 @@ def reset_teams():
     cur.close()
     conn.close()
 
-    return jsonify({
-        "ok": True,
-        "message": "All teams and scrobbles deleted. IDs restarted from 1."
-    })
+    return redirect("/")
 
 
 @app.route("/load-teams")
