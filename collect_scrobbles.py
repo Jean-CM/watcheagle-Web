@@ -12,6 +12,35 @@ def get_conn():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 
+def cleanup_legacy_scrobbles_schema(cur):
+    # Quitar NOT NULL heredados en columnas viejas si existen
+    cur.execute("""
+    DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='artist_name'
+        ) THEN
+            ALTER TABLE scrobbles ALTER COLUMN artist_name DROP NOT NULL;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='track_name'
+        ) THEN
+            ALTER TABLE scrobbles ALTER COLUMN track_name DROP NOT NULL;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='album_name'
+        ) THEN
+            ALTER TABLE scrobbles ALTER COLUMN album_name DROP NOT NULL;
+        END IF;
+    END $$;
+    """)
+
+
 def fetch_recent_tracks_page(user, page=1, limit=200):
     url = "https://ws.audioscrobbler.com/2.0/"
     params = {
@@ -99,6 +128,9 @@ def collect_user_history(cur, team):
 def main():
     conn = get_conn()
     cur = conn.cursor()
+
+    cleanup_legacy_scrobbles_schema(cur)
+    conn.commit()
 
     cur.execute("""
         SELECT id, name, app_name, lastfm_user
