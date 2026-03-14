@@ -46,47 +46,6 @@ def cleanup_legacy_scrobbles_schema(cur):
     END $$;
     """)
 
-    cur.execute("""
-    DO $$
-    BEGIN
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='artist_name'
-        ) THEN
-            UPDATE scrobbles
-            SET artist = COALESCE(artist, artist_name)
-            WHERE artist IS NULL;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='track_name'
-        ) THEN
-            UPDATE scrobbles
-            SET track = COALESCE(track, track_name)
-            WHERE track IS NULL;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='album_name'
-        ) THEN
-            UPDATE scrobbles
-            SET album = COALESCE(album, album_name)
-            WHERE album IS NULL;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='scrobble_time'
-        ) THEN
-            UPDATE scrobbles
-            SET scrobbled_at = COALESCE(scrobbled_at, scrobble_time)
-            WHERE scrobbled_at IS NULL;
-        END IF;
-    END $$;
-    """)
-
 
 def fetch_recent_tracks_page(user, page=1, limit=200):
     url = "https://ws.audioscrobbler.com/2.0/"
@@ -113,7 +72,6 @@ def fetch_recent_tracks_page(user, page=1, limit=200):
         tracks = [tracks]
 
     total_pages = int(attr.get("totalPages", 1)) if attr.get("totalPages") else 1
-
     return tracks, total_pages
 
 
@@ -134,16 +92,17 @@ def insert_track(cur, team, tr):
 
     cur.execute("""
         INSERT INTO scrobbles (
-            team_id, team_name, lastfm_user, app_name,
+            team_id, team_name, lastfm_user, app_name, country_code,
             artist, track, album, scrobbled_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (lastfm_user, artist, track, scrobbled_at) DO NOTHING
     """, (
         team["id"],
         team["name"],
         team["lastfm_user"],
         team["app_name"],
+        team["country_code"],
         artist if artist else None,
         track if track else None,
         album if album else None,
@@ -160,7 +119,6 @@ def collect_user_history(cur, team):
 
     while page <= total_pages:
         tracks, total_pages = fetch_recent_tracks_page(team["lastfm_user"], page=page, limit=200)
-
         if not tracks:
             break
 
@@ -180,7 +138,7 @@ def main():
     conn.commit()
 
     cur.execute("""
-        SELECT id, name, app_name, lastfm_user
+        SELECT id, name, app_name, lastfm_user, country_code
         FROM teams
         WHERE active = TRUE
         ORDER BY id ASC
@@ -194,10 +152,10 @@ def main():
             inserted = collect_user_history(cur, team)
             conn.commit()
             total_inserted += inserted
-            print(f"[OK] Collector {team['name']} | {team['lastfm_user']} | insertados={inserted}")
+            print(f"[OK] Collector {team['name']} | {team['lastfm_user']} | {team['country_code'] or '-'} | insertados={inserted}")
         except Exception as e:
             conn.rollback()
-            print(f"[ERROR] Collector {team['name']} | {team['lastfm_user']} | {e}")
+            print(f"[ERROR] Collector {team['name']} | {team['lastfm_user']} | {team['country_code'] or '-'} | {e}")
 
     cur.close()
     conn.close()
