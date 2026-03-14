@@ -1334,7 +1334,7 @@ def analytics():
     <div class="chart-card">
         <h2 class="section-title">Tendencia diaria de reproducciones por app</h2>
         <div class="subtle">Vista diaria segmentada para detectar dónde empuja más el consumo.</div>
-        <canvas id="dailyAppsChart" height="95"></canvas>
+        <canvas id="dailyAppsChart" height="80"></canvas>
     </div>
 
     <div class="card">
