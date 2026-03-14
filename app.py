@@ -12,9 +12,6 @@ app = Flask(__name__)
 DATABASE_URL = os.environ.get("DATABASE_URL")
 LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
 
-# =========================
-# CATÁLOGO ARTISTAS / AUTOR / DISTRIBUIDORA
-# =========================
 ARTIST_CATALOG = [
     {"artist": "Jeantune", "author": "Jean C", "distributor": "Distrokid"},
     {"artist": "JCSTUDIO", "author": "Jean C", "distributor": "Distrokid"},
@@ -303,9 +300,7 @@ def render_layout(title, body_html, subtitle="Centro analítico musical • JaTu
                 --shadow: 0 10px 30px rgba(15,23,42,0.08);
             }}
 
-            * {{
-                box-sizing: border-box;
-            }}
+            * {{ box-sizing: border-box; }}
 
             body {{
                 font-family: Inter, Arial, sans-serif;
@@ -606,7 +601,7 @@ def render_layout(title, body_html, subtitle="Centro analítico musical • JaTu
 
             .monitor-layout {{
                 display: grid;
-                grid-template-columns: 220px 220px 1fr 320px;
+                grid-template-columns: 220px 220px 220px 1fr;
                 gap: 12px;
                 margin-bottom: 14px;
                 align-items: start;
@@ -1002,7 +997,6 @@ def analytics():
     """)
     months = cur.fetchall()
 
-    # KPIs diarios
     cur.execute(f"""
         SELECT COUNT(*) AS c
         FROM scrobbles
@@ -1021,7 +1015,6 @@ def analytics():
 
     diff = plays_today - plays_yesterday
 
-    # KPIs mensuales
     cur.execute(f"""
         SELECT COUNT(*) AS c
         FROM scrobbles
@@ -1040,7 +1033,6 @@ def analytics():
 
     month_diff = month_current_total - month_previous_total
 
-    # Totales por app según filtros
     cur.execute(f"""
         SELECT
             COALESCE(SUM(CASE WHEN LOWER(app_name) = 'spotify' THEN 1 ELSE 0 END), 0) AS spotify_total,
@@ -1051,7 +1043,6 @@ def analytics():
     """, params)
     app_totals = cur.fetchone()
 
-    # Top artistas
     cur.execute(f"""
         SELECT COALESCE(artist, '-') AS artist, COUNT(*) AS plays
         FROM scrobbles
@@ -1063,7 +1054,6 @@ def analytics():
     top_artists = cur.fetchall()
     top_artist_max = max([x["plays"] for x in top_artists], default=1)
 
-    # Top canciones top 5
     cur.execute(f"""
         SELECT COALESCE(track, '-') AS track, COALESCE(artist, '-') AS artist, COUNT(*) AS plays
         FROM scrobbles
@@ -1074,7 +1064,6 @@ def analytics():
     """, params)
     top_tracks = cur.fetchall()
 
-    # Plays por equipo
     cur.execute(f"""
         SELECT COALESCE(team_name, '-') AS team_name, COUNT(*) AS plays
         FROM scrobbles
@@ -1085,7 +1074,6 @@ def analytics():
     """, params)
     plays_by_team = cur.fetchall()
 
-    # Comparativa artistas hoy vs ayer + mes actual/anterior
     cur.execute(f"""
         SELECT
             COALESCE(artist, '-') AS artist,
@@ -1101,7 +1089,6 @@ def analytics():
     """, params)
     compare_artists = cur.fetchall()
 
-    # Tendencia diaria por app
     cur.execute(f"""
         SELECT
             to_char(DATE(scrobbled_at), 'YYYY-MM-DD') AS day_label,
@@ -1114,7 +1101,6 @@ def analytics():
     """, params)
     daily_by_app_raw = cur.fetchall()
 
-    # Ganancias por día
     cur.execute(f"""
         SELECT
             DATE(scrobbled_at) AS day_label,
@@ -1127,7 +1113,6 @@ def analytics():
     """, params)
     earnings_daily_raw = cur.fetchall()
 
-    # Plays por artista para catálogo
     cur.execute(f"""
         SELECT
             COALESCE(artist, '-') AS artist,
@@ -1142,9 +1127,6 @@ def analytics():
     cur.close()
     conn.close()
 
-    # =========================
-    # GRÁFICA DIARIA POR APP
-    # =========================
     all_days = sorted(list({row["day_label"] for row in daily_by_app_raw}))
     app_series = {
         "spotify": [0] * len(all_days),
@@ -1162,9 +1144,6 @@ def analytics():
         elif appn == "apple music":
             app_series["apple"][day_index[day]] = plays
 
-    # =========================
-    # GANANCIAS POR DÍA
-    # =========================
     daily_earnings_map = defaultdict(lambda: {"plays": 0, "earnings": 0.0})
     for row in earnings_daily_raw:
         day = str(row["day_label"])
@@ -1182,9 +1161,6 @@ def analytics():
             "earnings": daily_earnings_map[day]["earnings"]
         })
 
-    # =========================
-    # CATÁLOGO ARTISTAS
-    # =========================
     artist_play_map = defaultdict(lambda: {"plays": 0, "earnings": 0.0})
     for row in catalog_raw:
         artist = row["artist"]
@@ -1210,9 +1186,9 @@ def analytics():
 
     catalog_rows = sorted(catalog_rows, key=lambda x: x["plays"], reverse=True)
 
-    # =========================
-    # HTML HELPERS
-    # =========================
+    # NUEVO: ganancias del contexto actual
+    current_context_earnings = sum(row["earnings"] for row in catalog_rows)
+
     def rows_simple(items, cols, money_cols=None):
         money_cols = money_cols or []
         html = ""
@@ -1305,6 +1281,9 @@ def analytics():
                 <span class="summary-chip">Filtro app: {app_filter if app_filter != 'all' else 'todas'}</span>
                 <span class="summary-chip">Filtro mes: {month_filter if month_filter != 'all' else 'todos'}</span>
                 <span class="summary-chip">Distribuidora: {distributor_filter if distributor_filter != 'all' else 'todas'}</span>
+            </div>
+            <div class="summary-stack" style="margin-top:12px;">
+                <span class="summary-chip">Ganancias del contexto: {format_money(current_context_earnings)}</span>
             </div>
         </div>
     </div>
