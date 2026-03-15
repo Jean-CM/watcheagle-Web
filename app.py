@@ -1916,10 +1916,12 @@ def run_check():
             ["python", "watch_scrobbles.py"],
             capture_output=True,
             text=True,
-            timeout=600
+            timeout=180
         )
         output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
         return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
+    except subprocess.TimeoutExpired:
+        return "Error ejecutando watch_scrobbles.py:\nTimeout: el chequeo tardó demasiado.", 500, {"Content-Type": "text/plain; charset=utf-8"}
     except Exception as e:
         return f"Error ejecutando watch_scrobbles.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
 
@@ -1931,13 +1933,14 @@ def run_collector():
             ["python", "collect_scrobbles.py"],
             capture_output=True,
             text=True,
-            timeout=1800
+            timeout=300
         )
         output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
         return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
+    except subprocess.TimeoutExpired:
+        return "Error ejecutando collect_scrobbles.py:\nTimeout: el collector tardó demasiado.", 500, {"Content-Type": "text/plain; charset=utf-8"}
     except Exception as e:
         return f"Error ejecutando collect_scrobbles.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
-
 
 @app.route("/health")
 def health():
