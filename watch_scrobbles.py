@@ -4,7 +4,6 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime, timezone
 
-# Twilio opcional
 try:
     from twilio.rest import Client
 except Exception:
@@ -22,11 +21,15 @@ def get_conn():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 
+def make_aware_utc(dt):
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def send_whatsapp_alert(message: str):
-    """
-    Envía alerta por WhatsApp usando Twilio si está configurado.
-    Si no, solo imprime warning y sigue.
-    """
     if Client is None:
         print("[WARN] Twilio no está instalado. Alerta no enviada.")
         return
@@ -47,22 +50,12 @@ def send_whatsapp_alert(message: str):
             from_=f"whatsapp:{whatsapp_from}",
             to=f"whatsapp:{whatsapp_to}"
         )
-        print(f"[OK] WhatsApp enviado: {message}")
+        print("[OK] WhatsApp enviado")
     except Exception as e:
         print(f"[ERROR] No se pudo enviar WhatsApp: {e}")
 
 
 def fetch_lastfm_recent_track(username: str):
-    """
-    Retorna:
-      {
-        "artist": ...,
-        "track": ...,
-        "album": ...,
-        "scrobbled_at": datetime | None,
-        "now_playing": bool
-      }
-    """
     if not LASTFM_API_KEY:
         raise Exception("LASTFM_API_KEY no está configurada")
 
@@ -103,10 +96,9 @@ def fetch_lastfm_recent_track(username: str):
     album = ((tr.get("album") or {}).get("#text", "") or "").strip() or None
     now_playing = tr.get("@attr", {}).get("nowplaying") == "true"
 
+    scrobbled_at = None
     date_info = tr.get("date", {})
     uts = date_info.get("uts")
-
-    scrobbled_at = None
     if uts:
         scrobbled_at = datetime.fromtimestamp(int(uts), tz=timezone.utc)
 
@@ -119,18 +111,18 @@ def fetch_lastfm_recent_track(username: str):
     }
 
 
-def minutes_since(dt: datetime | None):
-    if not dt:
+def minutes_since(dt):
+    dt = make_aware_utc(dt)
+    if dt is None:
         return None
     now = datetime.now(timezone.utc)
     diff = now - dt
     return int(diff.total_seconds() // 60)
 
 
-def determine_status(idle_minutes: int | None):
+def determine_status(idle_minutes):
     if idle_minutes is None:
         return "PENDING"
-
     if idle_minutes >= INCIDENT_MIN:
         return "INCIDENT"
     if idle_minutes >= WARN_MIN:
@@ -138,16 +130,12 @@ def determine_status(idle_minutes: int | None):
     return "OK"
 
 
-def should_send_alert(current_status: str, previous_status: str | None, last_alert_at):
-    """
-    Reglas simples:
-    - Solo alertar si entra en INCIDENT
-    - No repetir si sigue en INCIDENT y no ha pasado cooldown
-    """
+def should_send_alert(current_status, previous_status, last_alert_at):
     if current_status != "INCIDENT":
         return False
 
     now = datetime.now(timezone.utc)
+    last_alert_at = make_aware_utc(last_alert_at)
 
     if previous_status != "INCIDENT":
         return True
@@ -168,7 +156,7 @@ def build_alert_message(team, recent, idle_minutes):
 
     scrobble_str = "-"
     if scrobble_time:
-        scrobble_str = scrobble_time.strftime("%Y-%m-%d %H:%M:%S UTC")
+        scrobble_str = make_aware_utc(scrobble_time).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     return (
         f"🚨 INCIDENCIA WatchEagle\n"
@@ -216,7 +204,6 @@ def main():
             recent = fetch_lastfm_recent_track(team["lastfm_user"])
             idle_minutes = minutes_since(recent["scrobbled_at"])
             new_status = determine_status(idle_minutes)
-
             now_utc = datetime.now(timezone.utc)
 
             cur.execute("""
