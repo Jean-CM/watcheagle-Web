@@ -1911,14 +1911,32 @@ def reset_teams():
 # =========================
 @app.route("/run-check")
 def run_check():
-    result = subprocess.run(["python", "watch_scrobbles.py"], capture_output=True, text=True)
-    return f"{result.stdout}\n{result.stderr}"
+    try:
+        result = subprocess.run(
+            ["python", "watch_scrobbles.py"],
+            capture_output=True,
+            text=True,
+            timeout=600
+        )
+        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
+    except Exception as e:
+        return f"Error ejecutando watch_scrobbles.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/run-collector")
 def run_collector():
-    result = subprocess.run(["python", "collect_scrobbles.py"], capture_output=True, text=True)
-    return f"{result.stdout}\n{result.stderr}"
+    try:
+        result = subprocess.run(
+            ["python", "collect_scrobbles.py"],
+            capture_output=True,
+            text=True,
+            timeout=1800
+        )
+        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
+    except Exception as e:
+        return f"Error ejecutando collect_scrobbles.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/health")
