@@ -3,7 +3,10 @@ import requests
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime, timezone, timedelta
-from twilio.rest import Client
+try:
+    from twilio.rest import Client
+except Exception:
+    Client = None
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
