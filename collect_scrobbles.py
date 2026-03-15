@@ -12,41 +12,6 @@ def get_conn():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 
-def cleanup_legacy_scrobbles_schema(cur):
-    cur.execute("""
-    DO $$
-    BEGIN
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='artist_name'
-        ) THEN
-            ALTER TABLE scrobbles ALTER COLUMN artist_name DROP NOT NULL;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='track_name'
-        ) THEN
-            ALTER TABLE scrobbles ALTER COLUMN track_name DROP NOT NULL;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='album_name'
-        ) THEN
-            ALTER TABLE scrobbles ALTER COLUMN album_name DROP NOT NULL;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='scrobble_time'
-        ) THEN
-            ALTER TABLE scrobbles ALTER COLUMN scrobble_time DROP NOT NULL;
-        END IF;
-    END $$;
-    """)
-
-
 def fetch_recent_tracks_page(user, page=1, limit=200):
     url = "https://ws.audioscrobbler.com/2.0/"
     params = {
@@ -102,7 +67,7 @@ def insert_track(cur, team, tr):
         team["name"],
         team["lastfm_user"],
         team["app_name"],
-        team["country_code"],
+        team.get("country_code"),
         artist if artist else None,
         track if track else None,
         album if album else None,
@@ -131,11 +96,13 @@ def collect_user_history(cur, team):
 
 
 def main():
+    if not DATABASE_URL:
+        raise Exception("DATABASE_URL no está configurada")
+    if not LASTFM_API_KEY:
+        raise Exception("LASTFM_API_KEY no está configurada")
+
     conn = get_conn()
     cur = conn.cursor()
-
-    cleanup_legacy_scrobbles_schema(cur)
-    conn.commit()
 
     cur.execute("""
         SELECT id, name, app_name, lastfm_user, country_code
@@ -152,10 +119,10 @@ def main():
             inserted = collect_user_history(cur, team)
             conn.commit()
             total_inserted += inserted
-            print(f"[OK] Collector {team['name']} | {team['lastfm_user']} | {team['country_code'] or '-'} | insertados={inserted}")
+            print(f"[OK] Collector {team['name']} | {team['lastfm_user']} | {team.get('country_code') or '-'} | insertados={inserted}")
         except Exception as e:
             conn.rollback()
-            print(f"[ERROR] Collector {team['name']} | {team['lastfm_user']} | {team['country_code'] or '-'} | {e}")
+            print(f"[ERROR] Collector {team['name']} | {team['lastfm_user']} | {team.get('country_code') or '-'} | {e}")
 
     cur.close()
     conn.close()
