@@ -40,7 +40,7 @@ COUNTRIES = ["EE", "UK", "CA", "MX", "ES", "DO", "CO", "AR", "CL", "PE", "BR"]
 
 APP_ICONS = {
     "spotify": "🟢",
-    "tidal": "🔷",
+    "tidal": "♣️",
     "apple": "🍎",
     "apple music": "🍎"
 }
@@ -53,9 +53,9 @@ def get_rate_for_app(app_name: str) -> float:
     if name == "spotify":
         return 0.0035
     if name == "tidal":
-        return 0.006
+        return 0.0065
     if name in ("apple", "apple music"):
-        return 0.0
+        return 0.005
     return 0.0
 
 
