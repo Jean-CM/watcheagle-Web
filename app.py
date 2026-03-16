@@ -1024,7 +1024,7 @@ def home():
     """
 
     subtitle = build_subtitle("Monitor operativo", app_filter, "all", country_filter, "all")
-    return render_layout("WatchEagle ULTRA", body, subtitle)
+    return render_layout("WatchEagle", body, subtitle)
 
 
 # =========================
