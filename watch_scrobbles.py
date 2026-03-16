@@ -56,6 +56,20 @@ def send_whatsapp_alert(message: str):
 
 
 def fetch_lastfm_recent_track(username: str):
+    """
+    Devuelve:
+    {
+      artist,
+      track,
+      album,
+      scrobbled_at,
+      now_playing
+    }
+
+    Regla:
+    - si hay nowplaying, usamos el segundo track con fecha como último scrobble
+    - si no hay nowplaying, usamos el primero con fecha
+    """
     if not LASTFM_API_KEY:
         raise Exception("LASTFM_API_KEY no está configurada")
 
@@ -65,7 +79,7 @@ def fetch_lastfm_recent_track(username: str):
         "user": username,
         "api_key": LASTFM_API_KEY,
         "format": "json",
-        "limit": 1
+        "limit": 2
     }
 
     response = requests.get(url, params=params, timeout=30)
@@ -89,16 +103,29 @@ def fetch_lastfm_recent_track(username: str):
             "now_playing": False
         }
 
-    tr = track_list[0]
+    first = track_list[0]
+    first_now_playing = first.get("@attr", {}).get("nowplaying") == "true"
 
-    artist = ((tr.get("artist") or {}).get("#text", "") or "").strip() or None
-    track = (tr.get("name", "") or "").strip() or None
-    album = ((tr.get("album") or {}).get("#text", "") or "").strip() or None
-    now_playing = tr.get("@attr", {}).get("nowplaying") == "true"
+    # Si está sonando ahora, intentamos usar el segundo track como último scrobble con fecha
+    selected = None
+
+    if first_now_playing:
+        if len(track_list) > 1:
+            second = track_list[1]
+            if second.get("date", {}).get("uts"):
+                selected = second
+        # fallback extremo: usar first aunque no tenga fecha
+        if selected is None:
+            selected = first
+    else:
+        selected = first
+
+    artist = ((selected.get("artist") or {}).get("#text", "") or "").strip() or None
+    track = (selected.get("name", "") or "").strip() or None
+    album = ((selected.get("album") or {}).get("#text", "") or "").strip() or None
 
     scrobbled_at = None
-    date_info = tr.get("date", {})
-    uts = date_info.get("uts")
+    uts = (selected.get("date") or {}).get("uts")
     if uts:
         scrobbled_at = datetime.fromtimestamp(int(uts), tz=timezone.utc)
 
@@ -107,7 +134,7 @@ def fetch_lastfm_recent_track(username: str):
         "track": track,
         "album": album,
         "scrobbled_at": scrobbled_at,
-        "now_playing": now_playing
+        "now_playing": first_now_playing
     }
 
 
@@ -120,9 +147,14 @@ def minutes_since(dt):
     return int(diff.total_seconds() // 60)
 
 
-def determine_status(idle_minutes):
+def determine_status(idle_minutes, now_playing=False):
+    # si está sonando ahora mismo, está OK. Punto.
+    if now_playing:
+        return "OK"
+
     if idle_minutes is None:
         return "PENDING"
+
     if idle_minutes >= INCIDENT_MIN:
         return "INCIDENT"
     if idle_minutes >= WARN_MIN:
@@ -197,13 +229,20 @@ def main():
     ok_count = 0
     warn_count = 0
     incident_count = 0
+    pending_count = 0
     error_count = 0
 
     for team in teams:
         try:
             recent = fetch_lastfm_recent_track(team["lastfm_user"])
-            idle_minutes = minutes_since(recent["scrobbled_at"])
-            new_status = determine_status(idle_minutes)
+
+            # si now_playing, consideramos idle 0
+            if recent["now_playing"]:
+                idle_minutes = 0
+            else:
+                idle_minutes = minutes_since(recent["scrobbled_at"])
+
+            new_status = determine_status(idle_minutes, recent["now_playing"])
             now_utc = datetime.now(timezone.utc)
 
             cur.execute("""
@@ -241,10 +280,13 @@ def main():
                 warn_count += 1
             elif new_status == "INCIDENT":
                 incident_count += 1
+            elif new_status == "PENDING":
+                pending_count += 1
 
             print(
                 f"[OK] Check {team['name']} | {team['lastfm_user']} | "
-                f"{team.get('country_code') or '-'} | status={new_status} | idle={idle_minutes}"
+                f"{team.get('country_code') or '-'} | status={new_status} | "
+                f"idle={idle_minutes} | now_playing={recent['now_playing']}"
             )
 
         except Exception as e:
@@ -264,6 +306,7 @@ def main():
     print(f"OK: {ok_count}")
     print(f"WARN: {warn_count}")
     print(f"INCIDENT: {incident_count}")
+    print(f"PENDING: {pending_count}")
     print(f"Errores: {error_count}")
 
 
