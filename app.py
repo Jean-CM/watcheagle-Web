@@ -1478,7 +1478,7 @@ def analytics():
     """
 
     subtitle = build_subtitle("Analytics ejecutivo", app_filter, month_filter, country_filter, distributor_filter)
-    return render_layout("WatchEagle ULTRA", body, subtitle)
+    return render_layout("WatchEagle", body, subtitle)
 
 
 # =========================
@@ -1820,7 +1820,7 @@ def revenue():
     """
 
     subtitle = build_subtitle("Revenue intelligence", app_filter, month_filter, country_filter, distributor_filter)
-    return render_layout("WatchEagle ULTRA", body, subtitle)
+    return render_layout("WatchEagle", body, subtitle)
 
 
 # =========================
@@ -1945,7 +1945,7 @@ def run_collector():
 @app.route("/health")
 def health():
     init_db()
-    return jsonify({"ok": True, "service": "WatchEagle ULTRA"})
+    return jsonify({"ok": True, "service": "WatchEagle"})
 
 
 @app.route("/debug-lastfm")
