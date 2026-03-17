@@ -1406,7 +1406,7 @@ def Revenue ():
         GROUP BY country_code, LOWER(COALESCE(app_name,''))
         ORDER BY country_code
     """, params)
-    Revenue _country_raw = cur.fetchall()
+    revenue_country_raw = cur.fetchall()
 
     cur.execute(f"""
         SELECT COALESCE(artist,'-') AS artist,
@@ -1416,22 +1416,22 @@ def Revenue ():
         WHERE 1=1 {where_sql}
         GROUP BY artist, LOWER(COALESCE(app_name,''))
     """, params)
-    Revenue _artist_raw = cur.fetchall()
+    revenue_artist_raw = cur.fetchall()
 
     cur.close()
     conn.close()
 
     day_map = defaultdict(lambda: {"plays": 0, "Revenue ": 0.0})
-    for row in Revenue _daily_raw:
+    for row in revenue_daily_raw:
         day = str(row["day_label"])
         rate = get_rate_for_app(row["app_name"])
         plays = row["plays"]
         day_map[day]["plays"] += plays
         day_map[day]["Revenue "] += plays * rate
 
-    Revenue _by_day = []
+    revenue_by_day = []
     for day in sorted(day_map.keys(), reverse=True):
-        Revenue _by_day.append({
+        revenue_by_day.append({
             "day": day,
             "plays": day_map[day]["plays"],
             "Revenue ": day_map[day]["Revenue "],
@@ -1439,39 +1439,39 @@ def Revenue ():
         })
 
     country_map = defaultdict(lambda: {"plays": 0, "Revenue ": 0.0})
-    for row in Revenue _country_raw:
+    for row in revenue_country_raw:
         country = row["country_code"]
         rate = get_rate_for_app(row["app_name"])
         plays = row["plays"]
         country_map[country]["plays"] += plays
         country_map[country]["Revenue "] += plays * rate
 
-    Revenue _by_country = []
+    revenue_by_country = []
     for country, vals in country_map.items():
-        Revenue _by_country.append({
+        revenue_by_country.append({
             "country": country,
             "plays": vals["plays"],
             "Revenue ": vals["Revenue "],
             "rpm": 0 if vals["plays"] == 0 else round((vals["Revenue "] / vals["plays"]) * 1000, 2)
         })
-    Revenue _by_country = sorted(Revenue _by_country, key=lambda x: x["Revenue "], reverse=True)
+    revenue_by_country = sorted(revenue_by_country, key=lambda x: x["Revenue "], reverse=True)
 
     artist_map = defaultdict(lambda: {"plays": 0, "Revenue ": 0.0})
     distributor_map = defaultdict(lambda: {"plays": 0, "Revenue ": 0.0})
-    for row in Revenue _artist_raw:
+    for row in revenue_artist_raw:
         artist = row["artist"]
         rate = get_rate_for_app(row["app_name"])
         plays = row["plays"]
-        Revenue _val = plays * rate
+        revenue_val = plays * rate
         artist_map[artist.lower()]["plays"] += plays
-        artist_map[artist.lower()]["Revenue "] += Revenue _val
+        artist_map[artist.lower()]["Revenue "] += revenue_val
 
-    Revenue _by_artist = []
+    revenue_by_artist = []
     for item in ARTIST_CATALOG:
         if distributor_filter != "all" and item["distributor"] != distributor_filter:
             continue
         stats = artist_map.get(item["artist"].lower(), {"plays": 0, "Revenue ": 0.0})
-        Revenue _by_artist.append({
+        revenue_by_artist.append({
             "artist": item["artist"],
             "author": item["author"],
             "distributor": item["distributor"],
@@ -1482,29 +1482,29 @@ def Revenue ():
         distributor_map[item["distributor"]]["plays"] += stats["plays"]
         distributor_map[item["distributor"]]["Revenue "] += stats["Revenue "]
 
-    Revenue _by_artist = sorted(Revenue _by_artist, key=lambda x: x["Revenue "], reverse=True)
+    revenue_by_artist = sorted(revenue_by_artist, key=lambda x: x["Revenue "], reverse=True)
 
-    Revenue _by_distributor = []
+    revenue_by_distributor = []
     for dist, vals in distributor_map.items():
-        Revenue _by_distributor.append({
+        revenue_by_distributor.append({
             "distributor": dist,
             "plays": vals["plays"],
             "Revenue ": vals["Revenue "],
             "rpm": 0 if vals["plays"] == 0 else round((vals["Revenue "] / vals["plays"]) * 1000, 2)
         })
-    Revenue _by_distributor = sorted(Revenue _by_distributor, key=lambda x: x["Revenue "], reverse=True)
+    revenue_by_distributor = sorted(revenue_by_distributor, key=lambda x: x["Revenue "], reverse=True)
 
-    total_Revenue  = sum(x["Revenue "] for x in Revenue _by_artist)
-    Revenue _today = Revenue _by_day[0]["Revenue "] if Revenue _by_day else 0.0
-    Revenue _month = total_Revenue 
-    best_market = Revenue _by_country[0]["country"] if Revenue _by_country else "-"
-    total_plays_Revenue  = sum(x["plays"] for x in Revenue _by_artist)
+    total_Revenue  = sum(x["Revenue "] for x in revenue_by_artist)
+    revenue_today = revenue_by_day[0]["Revenue "] if revenue_by_day else 0.0
+    revenue_month = total_Revenue 
+    best_market = revenue_by_country[0]["country"] if revenue_by_country else "-"
+    total_plays_Revenue  = sum(x["plays"] for x in revenue_by_artist)
     avg_rpm = 0 if total_plays_Revenue  == 0 else round((total_Revenue  / total_plays_Revenue ) * 1000, 2)
 
-    country_labels = [x["country"] for x in Revenue _by_country]
-    country_Revenue s = [round(x["Revenue "], 2) for x in Revenue _by_country]
-    day_labels = [x["day"] for x in reversed(Revenue _by_day)]
-    day_Revenue s = [round(x["Revenue "], 2) for x in reversed(Revenue _by_day)]
+    country_labels = [x["country"] for x in revenue_by_country]
+    country_Revenue s = [round(x["Revenue "], 2) for x in revenue_by_country]
+    day_labels = [x["day"] for x in reversed(revenue_by_day)]
+    day_Revenue s = [round(x["Revenue "], 2) for x in reversed(revenue_by_day)]
 
     app_options = '<option value="all">Todas</option>'
     for a in apps:
@@ -1588,11 +1588,11 @@ def Revenue ():
     <div class="grid4">
         <div class="kpi">
             <div class="kpi-label">Revenue  hoy</div>
-            <div class="kpi-value">{format_money(Revenue _today)}</div>
+            <div class="kpi-value">{format_money(revenue_today)}</div>
         </div>
         <div class="kpi">
             <div class="kpi-label">Revenue  del contexto</div>
-            <div class="kpi-value">{format_money(Revenue _month)}</div>
+            <div class="kpi-value">{format_money(revenue_month)}</div>
         </div>
         <div class="kpi">
             <div class="kpi-label">RPM promedio</div>
@@ -1618,7 +1618,7 @@ def Revenue ():
         <div class="section-title">Ranking de países</div>
         <table>
             <thead><tr><th>País</th><th>Plays</th><th>Revenue </th><th>RPM</th></tr></thead>
-            <tbody>{rows_simple(Revenue _by_country, ['country', 'plays', 'Revenue ', 'rpm'], money_cols=['Revenue ']) if Revenue _by_country else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
+            <tbody>{rows_simple(revenue_by_country, ['country', 'plays', 'Revenue ', 'rpm'], money_cols=['Revenue ']) if revenue_by_country else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
 
@@ -1626,7 +1626,7 @@ def Revenue ():
         <div class="section-title">Ranking de artistas</div>
         <table>
             <thead><tr><th>Artista</th><th>Autor</th><th>Distribuidora</th><th>Plays</th><th>Revenue </th><th>RPM</th></tr></thead>
-            <tbody>{rows_simple(Revenue _by_artist, ['artist', 'author', 'distributor', 'plays', 'Revenue ', 'rpm'], money_cols=['Revenue ']) if Revenue _by_artist else '<tr><td colspan="6">Sin datos</td></tr>'}</tbody>
+            <tbody>{rows_simple(revenue_by_artist, ['artist', 'author', 'distributor', 'plays', 'Revenue ', 'rpm'], money_cols=['Revenue ']) if revenue_by_artist else '<tr><td colspan="6">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
 
@@ -1634,7 +1634,7 @@ def Revenue ():
         <div class="section-title">Ranking de distribuidoras</div>
         <table>
             <thead><tr><th>Distribuidora</th><th>Plays</th><th>Revenue </th><th>RPM</th></tr></thead>
-            <tbody>{rows_simple(Revenue _by_distributor, ['distributor', 'plays', 'Revenue ', 'rpm'], money_cols=['Revenue ']) if Revenue _by_distributor else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
+            <tbody>{rows_simple(revenue_by_distributor, ['distributor', 'plays', 'Revenue ', 'rpm'], money_cols=['Revenue ']) if revenue_by_distributor else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
 
@@ -1642,7 +1642,7 @@ def Revenue ():
         <div class="section-title">Ganancias por día</div>
         <table>
             <thead><tr><th>Día</th><th>Plays</th><th>Revenue </th><th>RPM</th></tr></thead>
-            <tbody>{rows_simple(Revenue _by_day, ['day', 'plays', 'Revenue ', 'rpm'], money_cols=['Revenue ']) if Revenue _by_day else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
+            <tbody>{rows_simple(revenue_by_day, ['day', 'plays', 'Revenue ', 'rpm'], money_cols=['Revenue ']) if revenue_by_day else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
 
