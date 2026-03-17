@@ -1395,7 +1395,7 @@ def Revenue ():
         GROUP BY DATE(scrobbled_at), LOWER(COALESCE(app_name,''))
         ORDER BY DATE(scrobbled_at) ASC
     """, params)
-    Revenue _daily_raw = cur.fetchall()
+    Revenue_daily_raw = cur.fetchall()
 
     cur.execute(f"""
         SELECT COALESCE(country_code, '-') AS country_code,
