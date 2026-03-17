@@ -56,20 +56,6 @@ def send_whatsapp_alert(message: str):
 
 
 def fetch_lastfm_recent_track(username: str):
-    """
-    Devuelve:
-    {
-      artist,
-      track,
-      album,
-      scrobbled_at,
-      now_playing
-    }
-
-    Regla:
-    - si hay nowplaying, usamos el segundo track con fecha como último scrobble
-    - si no hay nowplaying, usamos el primero con fecha
-    """
     if not LASTFM_API_KEY:
         raise Exception("LASTFM_API_KEY no está configurada")
 
@@ -106,7 +92,6 @@ def fetch_lastfm_recent_track(username: str):
     first = track_list[0]
     first_now_playing = first.get("@attr", {}).get("nowplaying") == "true"
 
-    # Si está sonando ahora, intentamos usar el segundo track como último scrobble con fecha
     selected = None
 
     if first_now_playing:
@@ -114,7 +99,6 @@ def fetch_lastfm_recent_track(username: str):
             second = track_list[1]
             if second.get("date", {}).get("uts"):
                 selected = second
-        # fallback extremo: usar first aunque no tenga fecha
         if selected is None:
             selected = first
     else:
@@ -148,13 +132,10 @@ def minutes_since(dt):
 
 
 def determine_status(idle_minutes, now_playing=False):
-    # si está sonando ahora mismo, está OK. Punto.
     if now_playing:
         return "OK"
-
     if idle_minutes is None:
         return "PENDING"
-
     if idle_minutes >= INCIDENT_MIN:
         return "INCIDENT"
     if idle_minutes >= WARN_MIN:
@@ -171,7 +152,6 @@ def should_send_alert(current_status, previous_status, last_alert_at):
 
     if previous_status != "INCIDENT":
         return True
-
     if last_alert_at is None:
         return True
 
@@ -236,7 +216,6 @@ def main():
         try:
             recent = fetch_lastfm_recent_track(team["lastfm_user"])
 
-            # si now_playing, consideramos idle 0
             if recent["now_playing"]:
                 idle_minutes = 0
             else:
