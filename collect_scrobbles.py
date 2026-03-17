@@ -120,7 +120,6 @@ def collect_user_incremental(cur, team):
 
             track_dt = datetime.fromtimestamp(int(uts), tz=timezone.utc)
 
-            # si ya llegamos a un track que ya teníamos o más viejo, paramos
             if latest_saved and track_dt <= latest_saved:
                 should_stop = True
                 break
@@ -165,7 +164,6 @@ def main():
     cur.close()
     conn.close()
 
-    print("")
     print(f"Total scrobbles insertados: {total_inserted}")
 
 
