@@ -7,14 +7,14 @@ from datetime import datetime, timezone
 DATABASE_URL = os.environ.get("DATABASE_URL")
 LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
 BACKFILL_LIMIT = int(os.environ.get("BACKFILL_LIMIT", "200"))
-BACKFILL_MAX_PAGES = int(os.environ.get("BACKFILL_MAX_PAGES", "20"))
+BACKFILL_MAX_PAGES = int(os.environ.get("BACKFILL_MAX_PAGES", "10"))
 
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 
-def fetch_recent_tracks_page(user, page=1, limit=200):
+def fetch_recent_tracks_page(user, page=1, limit=300):
     url = "https://ws.audioscrobbler.com/2.0/"
     params = {
         "method": "user.getrecenttracks",
@@ -79,10 +79,13 @@ def main():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT id, name, app_name, lastfm_user, country_code
-        FROM teams
-        WHERE active = TRUE
-        ORDER BY id ASC
+        SELECT t.id, t.name, t.app_name, t.lastfm_user, t.country_code
+        FROM teams t
+        LEFT JOIN scrobbles s ON s.team_id = t.id
+        WHERE t.active = TRUE
+        GROUP BY t.id, t.name, t.app_name, t.lastfm_user, t.country_code
+        HAVING COUNT(s.id) = 0
+        ORDER BY t.id ASC
     """)
     teams = cur.fetchall()
 
@@ -106,15 +109,15 @@ def main():
 
             conn.commit()
             total_inserted += inserted
-            print(f"[OK] Backfill {team['name']} | {team['lastfm_user']} | insertados={inserted}")
+            print(f"[OK] Nuevo usuario {team['name']} | {team['lastfm_user']} | insertados={inserted}")
         except Exception as e:
             conn.rollback()
-            print(f"[ERROR] Backfill {team['name']} | {team['lastfm_user']} | {e}")
+            print(f"[ERROR] Nuevo usuario {team['name']} | {team['lastfm_user']} | {e}")
 
     cur.close()
     conn.close()
 
-    print(f"Total histórico insertado: {total_inserted}")
+    print(f"Total insertado para usuarios nuevos: {total_inserted}")
 
 
 if __name__ == "__main__":
