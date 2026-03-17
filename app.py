@@ -6,6 +6,7 @@ import subprocess
 import requests
 import json
 from collections import defaultdict
+from datetime import datetime, timezone
 
 app = Flask(__name__)
 
@@ -38,13 +39,6 @@ ARTIST_LOOKUP = {item["artist"].lower(): item for item in ARTIST_CATALOG}
 DISTRIBUTORS = sorted(list({item["distributor"] for item in ARTIST_CATALOG}))
 COUNTRIES = ["EE", "UK", "CA", "MX", "ES", "DO", "CO", "AR", "CL", "PE", "BR"]
 
-APP_ICONS = {
-    "spotify": "🟢",
-    "tidal": "♣️",
-    "apple": "🍎",
-    "apple music": "🍎"
-}
-
 
 def get_rate_for_app(app_name: str) -> float:
     if not app_name:
@@ -53,9 +47,9 @@ def get_rate_for_app(app_name: str) -> float:
     if name == "spotify":
         return 0.0035
     if name == "tidal":
-        return 0.0065
+        return 0.006
     if name in ("apple", "apple music"):
-        return 0.005
+        return 0.0
     return 0.0
 
 
@@ -129,7 +123,7 @@ def init_db():
     );
     """)
 
-    # Compatibilidad con esquemas viejos
+    # Compatibilidad
     cur.execute("ALTER TABLE teams ADD COLUMN IF NOT EXISTS country_code VARCHAR(5);")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS country_code VARCHAR(5);")
 
@@ -196,7 +190,6 @@ def init_db():
             WHERE table_name='scrobbles' AND column_name='artist_name'
         ) THEN
             UPDATE scrobbles SET artist = COALESCE(artist, artist_name) WHERE artist IS NULL;
-            ALTER TABLE scrobbles ALTER COLUMN artist_name DROP NOT NULL;
         END IF;
 
         IF EXISTS (
@@ -204,7 +197,6 @@ def init_db():
             WHERE table_name='scrobbles' AND column_name='track_name'
         ) THEN
             UPDATE scrobbles SET track = COALESCE(track, track_name) WHERE track IS NULL;
-            ALTER TABLE scrobbles ALTER COLUMN track_name DROP NOT NULL;
         END IF;
 
         IF EXISTS (
@@ -212,7 +204,6 @@ def init_db():
             WHERE table_name='scrobbles' AND column_name='album_name'
         ) THEN
             UPDATE scrobbles SET album = COALESCE(album, album_name) WHERE album IS NULL;
-            ALTER TABLE scrobbles ALTER COLUMN album_name DROP NOT NULL;
         END IF;
 
         IF EXISTS (
@@ -220,6 +211,38 @@ def init_db():
             WHERE table_name='scrobbles' AND column_name='scrobble_time'
         ) THEN
             UPDATE scrobbles SET scrobbled_at = COALESCE(scrobbled_at, scrobble_time) WHERE scrobbled_at IS NULL;
+        END IF;
+    END $$;
+    """)
+
+    cur.execute("""
+    DO $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='artist_name'
+        ) THEN
+            ALTER TABLE scrobbles ALTER COLUMN artist_name DROP NOT NULL;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='track_name'
+        ) THEN
+            ALTER TABLE scrobbles ALTER COLUMN track_name DROP NOT NULL;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='album_name'
+        ) THEN
+            ALTER TABLE scrobbles ALTER COLUMN album_name DROP NOT NULL;
+        END IF;
+
+        IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='scrobbles' AND column_name='scrobble_time'
+        ) THEN
             ALTER TABLE scrobbles ALTER COLUMN scrobble_time DROP NOT NULL;
         END IF;
     END $$;
@@ -241,7 +264,7 @@ def init_db():
 
 
 # =========================
-# UI / LAYOUT
+# HELPERS UI
 # =========================
 def build_subtitle(mode: str, app_filter: str, month_filter: str, country_filter: str, distributor_filter: str):
     parts = [mode]
@@ -250,6 +273,79 @@ def build_subtitle(mode: str, app_filter: str, month_filter: str, country_filter
     parts.append(f"país: {country_filter if country_filter != 'all' else 'todos'}")
     parts.append(f"distribuidora: {distributor_filter if distributor_filter != 'all' else 'todas'}")
     return " • ".join(parts)
+
+
+def get_now_cards():
+    now = datetime.now()
+    return {
+        "date_str": now.strftime("%Y-%m-%d"),
+        "time_str": now.strftime("%H:%M:%S"),
+        "updated_str": now.strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+
+def rows_simple(items, cols, money_cols=None):
+    money_cols = money_cols or []
+    html = ""
+    for item in items:
+        tds = []
+        for col in cols:
+            value = item.get(col, "-")
+            if col in money_cols:
+                value = format_money(value or 0)
+            tds.append(f"<td>{value}</td>")
+        html += "<tr>" + "".join(tds) + "</tr>"
+    return html
+
+
+def top_artist_bars(items):
+    if not items:
+        return '<div class="hint">Sin datos</div>'
+
+    max_val = max([x["plays"] for x in items], default=1)
+    html = ['<div class="bars">']
+    for item in items:
+        pct = 0 if max_val == 0 else round((item["plays"] / max_val) * 100, 2)
+        html.append(f"""
+        <div class="bar-row">
+            <div class="bar-label">{item['artist']}</div>
+            <div class="bar-track"><div class="bar-fill" style="width:{pct}%;"></div></div>
+            <div class="bar-value">{item['plays']}</div>
+        </div>
+        """)
+    html.append("</div>")
+    return "".join(html)
+
+
+def build_filters():
+    app_filter = request.args.get("app", "all")
+    month_filter = request.args.get("month", "all")
+    country_filter = request.args.get("country", "all")
+    distributor_filter = request.args.get("distributor", "all")
+    return app_filter, month_filter, country_filter, distributor_filter
+
+
+def sql_filters(app_filter, month_filter, country_filter):
+    where = []
+    params = []
+
+    if app_filter != "all":
+        where.append("app_name = %s")
+        params.append(app_filter)
+
+    if month_filter != "all":
+        where.append("to_char(scrobbled_at, 'YYYY-MM') = %s")
+        params.append(month_filter)
+
+    if country_filter != "all":
+        where.append("country_code = %s")
+        params.append(country_filter)
+
+    where_sql = ""
+    if where:
+        where_sql = " AND " + " AND ".join(where)
+
+    return where_sql, params
 
 
 def render_layout(title, body_html, subtitle):
@@ -277,6 +373,7 @@ def render_layout(title, body_html, subtitle):
             }}
 
             * {{ box-sizing: border-box; }}
+
             body {{
                 margin: 0;
                 font-family: Inter, Arial, sans-serif;
@@ -304,17 +401,7 @@ def render_layout(title, body_html, subtitle):
             .brand {{
                 display: flex;
                 align-items: center;
-                gap: 14px;
-            }}
-
-            .brand img {{
-                width: 72px;
-                height: 72px;
-                border-radius: 20px;
-                object-fit: cover;
-                background: white;
-                border: 1px solid rgba(212,165,20,0.18);
-                box-shadow: 0 10px 22px rgba(212,165,20,0.10);
+                gap: 0;
             }}
 
             .brand-title {{
@@ -328,18 +415,6 @@ def render_layout(title, body_html, subtitle):
                 font-size: 13px;
                 color: var(--soft);
                 margin-top: 4px;
-            }}
-
-            .badge {{
-                display: inline-block;
-                margin-top: 7px;
-                padding: 6px 10px;
-                border-radius: 999px;
-                font-size: 12px;
-                font-weight: 800;
-                color: #8a6a00;
-                background: rgba(250,204,21,0.14);
-                border: 1px solid rgba(212,165,20,0.16);
             }}
 
             .nav {{
@@ -365,10 +440,12 @@ def render_layout(title, body_html, subtitle):
             .btn-gold {{
                 background: linear-gradient(180deg, #f1cc39 0%, #ddb215 100%);
             }}
+
             .btn-red {{
                 background: linear-gradient(180deg, #fb7185 0%, #f43f5e 100%);
                 color: white;
             }}
+
             .btn-orange {{
                 background: linear-gradient(180deg, #f6c14b 0%, #e8aa0f 100%);
             }}
@@ -378,6 +455,31 @@ def render_layout(title, body_html, subtitle):
                 border: 1px solid rgba(212,165,20,0.12);
                 box-shadow: var(--shadow);
                 backdrop-filter: blur(6px);
+            }}
+
+            .update-mini {{
+                background: rgba(255,255,255,0.88);
+                border: 1px solid rgba(212,165,20,0.12);
+                box-shadow: 0 8px 18px rgba(15,23,42,0.05);
+                border-radius: 16px;
+                padding: 12px 14px;
+                margin-bottom: 14px;
+                display: inline-flex;
+                flex-direction: column;
+                gap: 4px;
+                min-width: 220px;
+            }}
+
+            .update-mini .u-label {{
+                font-size: 11px;
+                color: #64748b;
+                font-weight: 700;
+            }}
+
+            .update-mini .u-value {{
+                font-size: 14px;
+                color: #0f172a;
+                font-weight: 800;
             }}
 
             .grid4 {{
@@ -411,6 +513,7 @@ def render_layout(title, body_html, subtitle):
                 font-size: 12px;
                 font-weight: 700;
             }}
+
             .kpi-value {{
                 font-size: 29px;
                 font-weight: 900;
@@ -567,6 +670,7 @@ def render_layout(title, body_html, subtitle):
                 font-size: 12px;
                 font-weight: 900;
             }}
+
             .status.ok {{ background: rgba(22,163,74,0.10); color: var(--ok); }}
             .status.warn {{ background: rgba(202,138,4,0.10); color: var(--warn); }}
             .status.incident {{ background: rgba(220,38,38,0.10); color: var(--incident); }}
@@ -644,17 +748,21 @@ def render_layout(title, body_html, subtitle):
                 .grid4 {{
                     grid-template-columns: repeat(2, minmax(140px, 1fr));
                 }}
+
                 .mini-grid {{
                     grid-template-columns: 1fr;
                 }}
+
                 .layout4 {{
                     grid-template-columns: 1fr;
                 }}
+
                 .bar-row {{
                     grid-template-columns: 1fr;
                 }}
             }}
         </style>
+
         <script>
             function openModal(title, content) {{
                 document.getElementById("modal-title").innerText = title;
@@ -671,7 +779,8 @@ def render_layout(title, body_html, subtitle):
                 try {{
                     const response = await fetch(url);
                     const text = await response.text();
-                    document.getElementById("modal-body").innerHTML = "<pre>" + text.replace(/</g, "&lt;").replace(/>/g, "&gt;") + "</pre>";
+                    document.getElementById("modal-body").innerHTML =
+                        "<pre>" + text.replace(/</g, "&lt;").replace(/>/g, "&gt;") + "</pre>";
                 }} catch (e) {{
                     document.getElementById("modal-body").innerHTML = "<pre>Error: " + e + "</pre>";
                 }}
@@ -699,11 +808,9 @@ def render_layout(title, body_html, subtitle):
         <div class="shell">
             <div class="top">
                 <div class="brand">
-                    <img src="/static/logo_jatune.png" alt="JATune">
                     <div>
                         <div class="brand-title">{title}</div>
                         <div class="brand-sub">{subtitle}</div>
-                        <div class="badge">JATune</div>
                     </div>
                 </div>
 
@@ -737,83 +844,13 @@ def render_layout(title, body_html, subtitle):
 
 
 # =========================
-# HELPERS ANALYTICS
-# =========================
-def build_filters():
-    app_filter = request.args.get("app", "all")
-    month_filter = request.args.get("month", "all")
-    country_filter = request.args.get("country", "all")
-    distributor_filter = request.args.get("distributor", "all")
-    return app_filter, month_filter, country_filter, distributor_filter
-
-
-def sql_filters(app_filter, month_filter, country_filter):
-    where = []
-    params = []
-
-    if app_filter != "all":
-        where.append("app_name = %s")
-        params.append(app_filter)
-
-    if month_filter != "all":
-        where.append("to_char(scrobbled_at, 'YYYY-MM') = %s")
-        params.append(month_filter)
-
-    if country_filter != "all":
-        where.append("country_code = %s")
-        params.append(country_filter)
-
-    where_sql = ""
-    if where:
-        where_sql = " AND " + " AND ".join(where)
-
-    return where_sql, params
-
-
-def filter_catalog_by_distributor(rows, distributor_filter):
-    if distributor_filter == "all":
-        return rows
-    return [r for r in rows if r["distributor"] == distributor_filter]
-
-
-def rows_simple(items, cols, money_cols=None):
-    money_cols = money_cols or []
-    html = ""
-    for item in items:
-        tds = []
-        for col in cols:
-            value = item.get(col, "-")
-            if col in money_cols:
-                value = format_money(value or 0)
-            tds.append(f"<td>{value}</td>")
-        html += "<tr>" + "".join(tds) + "</tr>"
-    return html
-
-
-def top_artist_bars(items):
-    if not items:
-        return '<div class="hint">Sin datos</div>'
-    max_val = max([x["plays"] for x in items], default=1)
-    html = ['<div class="bars">']
-    for item in items:
-        pct = 0 if max_val == 0 else round((item["plays"] / max_val) * 100, 2)
-        html.append(f"""
-        <div class="bar-row">
-            <div class="bar-label">{item['artist']}</div>
-            <div class="bar-track"><div class="bar-fill" style="width:{pct}%;"></div></div>
-            <div class="bar-value">{item['plays']}</div>
-        </div>
-        """)
-    html.append("</div>")
-    return "".join(html)
-
-
-# =========================
 # MONITOR
 # =========================
 @app.route("/")
 def home():
     init_db()
+    now_card = get_now_cards()
+
     app_filter = request.args.get("app", "all")
     status_filter = request.args.get("status", "all")
     country_filter = request.args.get("country", "all")
@@ -935,6 +972,12 @@ def home():
         """
 
     body = f"""
+    <div class="update-mini">
+        <div class="u-label">Última actualización</div>
+        <div class="u-value">{now_card['updated_str']}</div>
+        <div class="u-label">Fecha: {now_card['date_str']} • Hora: {now_card['time_str']}</div>
+    </div>
+
     <div class="grid4">
         <div class="kpi">
             <div class="kpi-label">Equipos activos</div>
@@ -1033,6 +1076,7 @@ def home():
 @app.route("/analytics")
 def analytics():
     init_db()
+    now_card = get_now_cards()
 
     app_filter, month_filter, country_filter, distributor_filter = build_filters()
     where_sql, params = sql_filters(app_filter, month_filter, country_filter)
@@ -1201,9 +1245,6 @@ def analytics():
         elif appn == "apple music":
             app_series["apple"][day_index[day]] = plays
 
-    # artist bars
-    max_artist = max([x["plays"] for x in top_artists], default=1)
-
     # catalog rows
     artist_map = defaultdict(lambda: {"plays": 0, "earnings": 0.0})
     for row in catalog_raw:
@@ -1265,6 +1306,12 @@ def analytics():
         distributor_options += f'<option value="{d}" {selected}>{d}</option>'
 
     body = f"""
+    <div class="update-mini">
+        <div class="u-label">Última actualización</div>
+        <div class="u-value">{now_card['updated_str']}</div>
+        <div class="u-label">Fecha: {now_card['date_str']} • Hora: {now_card['time_str']}</div>
+    </div>
+
     <div class="layout4">
         <div class="compact">
             <h3>Filtro app</h3>
@@ -1487,6 +1534,7 @@ def analytics():
 @app.route("/revenue")
 def revenue():
     init_db()
+    now_card = get_now_cards()
 
     app_filter, month_filter, country_filter, distributor_filter = build_filters()
     where_sql, params = sql_filters(app_filter, month_filter, country_filter)
@@ -1513,7 +1561,6 @@ def revenue():
     """)
     countries_db = cur.fetchall()
 
-    # raw for revenue
     cur.execute(f"""
         SELECT
             DATE(scrobbled_at) AS day_label,
@@ -1596,10 +1643,10 @@ def revenue():
         artist = row["artist"]
         rate = get_rate_for_app(row["app_name"])
         plays = row["plays"]
-        revenue = plays * rate
+        revenue_val = plays * rate
 
         artist_map[artist.lower()]["plays"] += plays
-        artist_map[artist.lower()]["revenue"] += revenue
+        artist_map[artist.lower()]["revenue"] += revenue_val
 
     revenue_by_artist = []
     for item in ARTIST_CATALOG:
@@ -1633,7 +1680,8 @@ def revenue():
     revenue_today = revenue_by_day[0]["revenue"] if revenue_by_day else 0.0
     revenue_month = total_revenue
     best_market = revenue_by_country[0]["country"] if revenue_by_country else "-"
-    avg_rpm = 0 if sum(x["plays"] for x in revenue_by_artist) == 0 else round((total_revenue / sum(x["plays"] for x in revenue_by_artist)) * 1000, 2)
+    total_plays_revenue = sum(x["plays"] for x in revenue_by_artist)
+    avg_rpm = 0 if total_plays_revenue == 0 else round((total_revenue / total_plays_revenue) * 1000, 2)
 
     country_labels = [x["country"] for x in revenue_by_country]
     country_revenues = [round(x["revenue"], 2) for x in revenue_by_country]
@@ -1664,6 +1712,12 @@ def revenue():
         distributor_options += f'<option value="{d}" {selected}>{d}</option>'
 
     body = f"""
+    <div class="update-mini">
+        <div class="u-label">Última actualización</div>
+        <div class="u-value">{now_card['updated_str']}</div>
+        <div class="u-label">Fecha: {now_card['date_str']} • Hora: {now_card['time_str']}</div>
+    </div>
+
     <div class="layout4">
         <div class="compact">
             <h3>Filtro app</h3>
@@ -1874,7 +1928,7 @@ def import_real_teams():
     cur.close()
     conn.close()
 
-    return f"Creados: {len(created)}\nOmitidos: {len(skipped)}\n\nCreados:\n{created}\n\nOmitidos:\n{skipped}"
+    return f"Creados: {len(created)}\\nOmitidos: {len(skipped)}\\n\\nCreados:\\n{created}\\n\\nOmitidos:\\n{skipped}"
 
 
 @app.route("/delete-team")
@@ -1906,6 +1960,99 @@ def reset_teams():
     return redirect("/")
 
 
+@app.route("/update-country")
+def update_country():
+    init_db()
+
+    team_id = request.args.get("id")
+    team_name = request.args.get("name")
+    country = (request.args.get("country") or "").strip().upper()
+
+    if not country:
+        return "Falta country", 400
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    if team_id:
+        cur.execute("""
+            UPDATE teams
+            SET country_code = %s
+            WHERE id = %s
+            RETURNING id, name, country_code
+        """, (country, team_id))
+    elif team_name:
+        cur.execute("""
+            UPDATE teams
+            SET country_code = %s
+            WHERE name = %s
+            RETURNING id, name, country_code
+        """, (country, team_name))
+    else:
+        cur.close()
+        conn.close()
+        return "Debes enviar id o name", 400
+
+    row = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    if not row:
+        return "Equipo no encontrado", 404
+
+    return jsonify({
+        "ok": True,
+        "updated": row
+    })
+
+
+@app.route("/bulk-update-country", methods=["POST"])
+def bulk_update_country():
+    init_db()
+
+    text = request.form.get("lines", "").strip()
+    if not text:
+        return "No se recibió contenido", 400
+
+    lines = [x.strip() for x in text.splitlines() if x.strip()]
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    updated = []
+    skipped = []
+
+    for line in lines:
+        parts = [p.strip() for p in line.split(",")]
+
+        if len(parts) != 2:
+            skipped.append({"line": line, "reason": "Formato inválido. Usa nombre_equipo,pais"})
+            continue
+
+        team_name = parts[0]
+        country = parts[1].upper()
+
+        cur.execute("""
+            UPDATE teams
+            SET country_code = %s
+            WHERE name = %s
+            RETURNING id, name, country_code
+        """, (country, team_name))
+
+        row = cur.fetchone()
+        if row:
+            updated.append(row)
+        else:
+            skipped.append({"line": line, "reason": "Equipo no encontrado"})
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return f"Actualizados: {len(updated)}\\nOmitidos: {len(skipped)}\\n\\nActualizados:\\n{updated}\\n\\nOmitidos:\\n{skipped}"
+
+
 # =========================
 # OPERACIÓN
 # =========================
@@ -1918,12 +2065,12 @@ def run_check():
             text=True,
             timeout=180
         )
-        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        output = f"STDOUT:\\n{result.stdout}\\n\\nSTDERR:\\n{result.stderr}"
         return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
     except subprocess.TimeoutExpired:
-        return "Error ejecutando watch_scrobbles.py:\nTimeout: el chequeo tardó demasiado.", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        return "Error ejecutando watch_scrobbles.py:\\nTimeout: el chequeo tardó demasiado.", 500, {"Content-Type": "text/plain; charset=utf-8"}
     except Exception as e:
-        return f"Error ejecutando watch_scrobbles.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        return f"Error ejecutando watch_scrobbles.py:\\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/run-collector")
@@ -1935,12 +2082,13 @@ def run_collector():
             text=True,
             timeout=300
         )
-        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        output = f"STDOUT:\\n{result.stdout}\\n\\nSTDERR:\\n{result.stderr}"
         return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
     except subprocess.TimeoutExpired:
-        return "Error ejecutando collect_scrobbles.py:\nTimeout: el collector tardó demasiado.", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        return "Error ejecutando collect_scrobbles.py:\\nTimeout: el collector tardó demasiado.", 500, {"Content-Type": "text/plain; charset=utf-8"}
     except Exception as e:
-        return f"Error ejecutando collect_scrobbles.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        return f"Error ejecutando collect_scrobbles.py:\\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+
 
 @app.route("/health")
 def health():
