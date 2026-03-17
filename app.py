@@ -659,7 +659,7 @@ def render_layout(title, body_html, subtitle):
                 <div class="nav">
                     <a href="/">Monitor</a>
                     <a href="/analytics">Analytics</a>
-                    <a href="/revenue">Revenue</a>
+                    <a href="/Ganancias Estimadas">Ganancias Estimadas</a>
                     <button class="btn btn-gold" onclick="window.location.reload()">Refrescar</button>
                     <button class="btn btn-gold" onclick="runAction('/run-check', 'Resultado del chequeo')">Correr chequeo</button>
                     <button class="btn btn-gold" onclick="runAction('/run-collector', 'Resultado del collector')">Correr collector</button>
@@ -1356,8 +1356,8 @@ def analytics():
     return render_layout("WatchEagle", body, subtitle)
 
 
-@app.route("/revenue")
-def revenue():
+@app.route("/Ganancias Estimadas")
+def Ganancias Estimadas():
     init_db()
     now_card = get_now_cards()
 
@@ -1395,7 +1395,7 @@ def revenue():
         GROUP BY DATE(scrobbled_at), LOWER(COALESCE(app_name,''))
         ORDER BY DATE(scrobbled_at) ASC
     """, params)
-    revenue_daily_raw = cur.fetchall()
+    Ganancias Estimadas_daily_raw = cur.fetchall()
 
     cur.execute(f"""
         SELECT COALESCE(country_code, '-') AS country_code,
@@ -1406,7 +1406,7 @@ def revenue():
         GROUP BY country_code, LOWER(COALESCE(app_name,''))
         ORDER BY country_code
     """, params)
-    revenue_country_raw = cur.fetchall()
+    Ganancias Estimadas_country_raw = cur.fetchall()
 
     cur.execute(f"""
         SELECT COALESCE(artist,'-') AS artist,
@@ -1416,95 +1416,95 @@ def revenue():
         WHERE 1=1 {where_sql}
         GROUP BY artist, LOWER(COALESCE(app_name,''))
     """, params)
-    revenue_artist_raw = cur.fetchall()
+    Ganancias Estimadas_artist_raw = cur.fetchall()
 
     cur.close()
     conn.close()
 
-    day_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
-    for row in revenue_daily_raw:
+    day_map = defaultdict(lambda: {"plays": 0, "Ganancias Estimadas": 0.0})
+    for row in Ganancias Estimadas_daily_raw:
         day = str(row["day_label"])
         rate = get_rate_for_app(row["app_name"])
         plays = row["plays"]
         day_map[day]["plays"] += plays
-        day_map[day]["revenue"] += plays * rate
+        day_map[day]["Ganancias Estimadas"] += plays * rate
 
-    revenue_by_day = []
+    Ganancias Estimadas_by_day = []
     for day in sorted(day_map.keys(), reverse=True):
-        revenue_by_day.append({
+        Ganancias Estimadas_by_day.append({
             "day": day,
             "plays": day_map[day]["plays"],
-            "revenue": day_map[day]["revenue"],
-            "rpm": 0 if day_map[day]["plays"] == 0 else round((day_map[day]["revenue"] / day_map[day]["plays"]) * 1000, 2)
+            "Ganancias Estimadas": day_map[day]["Ganancias Estimadas"],
+            "rpm": 0 if day_map[day]["plays"] == 0 else round((day_map[day]["Ganancias Estimadas"] / day_map[day]["plays"]) * 1000, 2)
         })
 
-    country_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
-    for row in revenue_country_raw:
+    country_map = defaultdict(lambda: {"plays": 0, "Ganancias Estimadas": 0.0})
+    for row in Ganancias Estimadas_country_raw:
         country = row["country_code"]
         rate = get_rate_for_app(row["app_name"])
         plays = row["plays"]
         country_map[country]["plays"] += plays
-        country_map[country]["revenue"] += plays * rate
+        country_map[country]["Ganancias Estimadas"] += plays * rate
 
-    revenue_by_country = []
+    Ganancias Estimadas_by_country = []
     for country, vals in country_map.items():
-        revenue_by_country.append({
+        Ganancias Estimadas_by_country.append({
             "country": country,
             "plays": vals["plays"],
-            "revenue": vals["revenue"],
-            "rpm": 0 if vals["plays"] == 0 else round((vals["revenue"] / vals["plays"]) * 1000, 2)
+            "Ganancias Estimadas": vals["Ganancias Estimadas"],
+            "rpm": 0 if vals["plays"] == 0 else round((vals["Ganancias Estimadas"] / vals["plays"]) * 1000, 2)
         })
-    revenue_by_country = sorted(revenue_by_country, key=lambda x: x["revenue"], reverse=True)
+    Ganancias Estimadas_by_country = sorted(Ganancias Estimadas_by_country, key=lambda x: x["Ganancias Estimadas"], reverse=True)
 
-    artist_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
-    distributor_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
-    for row in revenue_artist_raw:
+    artist_map = defaultdict(lambda: {"plays": 0, "Ganancias Estimadas": 0.0})
+    distributor_map = defaultdict(lambda: {"plays": 0, "Ganancias Estimadas": 0.0})
+    for row in Ganancias Estimadas_artist_raw:
         artist = row["artist"]
         rate = get_rate_for_app(row["app_name"])
         plays = row["plays"]
-        revenue_val = plays * rate
+        Ganancias Estimadas_val = plays * rate
         artist_map[artist.lower()]["plays"] += plays
-        artist_map[artist.lower()]["revenue"] += revenue_val
+        artist_map[artist.lower()]["Ganancias Estimadas"] += Ganancias Estimadas_val
 
-    revenue_by_artist = []
+    Ganancias Estimadas_by_artist = []
     for item in ARTIST_CATALOG:
         if distributor_filter != "all" and item["distributor"] != distributor_filter:
             continue
-        stats = artist_map.get(item["artist"].lower(), {"plays": 0, "revenue": 0.0})
-        revenue_by_artist.append({
+        stats = artist_map.get(item["artist"].lower(), {"plays": 0, "Ganancias Estimadas": 0.0})
+        Ganancias Estimadas_by_artist.append({
             "artist": item["artist"],
             "author": item["author"],
             "distributor": item["distributor"],
             "plays": stats["plays"],
-            "revenue": stats["revenue"],
-            "rpm": 0 if stats["plays"] == 0 else round((stats["revenue"] / stats["plays"]) * 1000, 2)
+            "Ganancias Estimadas": stats["Ganancias Estimadas"],
+            "rpm": 0 if stats["plays"] == 0 else round((stats["Ganancias Estimadas"] / stats["plays"]) * 1000, 2)
         })
         distributor_map[item["distributor"]]["plays"] += stats["plays"]
-        distributor_map[item["distributor"]]["revenue"] += stats["revenue"]
+        distributor_map[item["distributor"]]["Ganancias Estimadas"] += stats["Ganancias Estimadas"]
 
-    revenue_by_artist = sorted(revenue_by_artist, key=lambda x: x["revenue"], reverse=True)
+    Ganancias Estimadas_by_artist = sorted(Ganancias Estimadas_by_artist, key=lambda x: x["Ganancias Estimadas"], reverse=True)
 
-    revenue_by_distributor = []
+    Ganancias Estimadas_by_distributor = []
     for dist, vals in distributor_map.items():
-        revenue_by_distributor.append({
+        Ganancias Estimadas_by_distributor.append({
             "distributor": dist,
             "plays": vals["plays"],
-            "revenue": vals["revenue"],
-            "rpm": 0 if vals["plays"] == 0 else round((vals["revenue"] / vals["plays"]) * 1000, 2)
+            "Ganancias Estimadas": vals["Ganancias Estimadas"],
+            "rpm": 0 if vals["plays"] == 0 else round((vals["Ganancias Estimadas"] / vals["plays"]) * 1000, 2)
         })
-    revenue_by_distributor = sorted(revenue_by_distributor, key=lambda x: x["revenue"], reverse=True)
+    Ganancias Estimadas_by_distributor = sorted(Ganancias Estimadas_by_distributor, key=lambda x: x["Ganancias Estimadas"], reverse=True)
 
-    total_revenue = sum(x["revenue"] for x in revenue_by_artist)
-    revenue_today = revenue_by_day[0]["revenue"] if revenue_by_day else 0.0
-    revenue_month = total_revenue
-    best_market = revenue_by_country[0]["country"] if revenue_by_country else "-"
-    total_plays_revenue = sum(x["plays"] for x in revenue_by_artist)
-    avg_rpm = 0 if total_plays_revenue == 0 else round((total_revenue / total_plays_revenue) * 1000, 2)
+    total_Ganancias Estimadas = sum(x["Ganancias Estimadas"] for x in Ganancias Estimadas_by_artist)
+    Ganancias Estimadas_today = Ganancias Estimadas_by_day[0]["Ganancias Estimadas"] if Ganancias Estimadas_by_day else 0.0
+    Ganancias Estimadas_month = total_Ganancias Estimadas
+    best_market = Ganancias Estimadas_by_country[0]["country"] if Ganancias Estimadas_by_country else "-"
+    total_plays_Ganancias Estimadas = sum(x["plays"] for x in Ganancias Estimadas_by_artist)
+    avg_rpm = 0 if total_plays_Ganancias Estimadas == 0 else round((total_Ganancias Estimadas / total_plays_Ganancias Estimadas) * 1000, 2)
 
-    country_labels = [x["country"] for x in revenue_by_country]
-    country_revenues = [round(x["revenue"], 2) for x in revenue_by_country]
-    day_labels = [x["day"] for x in reversed(revenue_by_day)]
-    day_revenues = [round(x["revenue"], 2) for x in reversed(revenue_by_day)]
+    country_labels = [x["country"] for x in Ganancias Estimadas_by_country]
+    country_Ganancias Estimadass = [round(x["Ganancias Estimadas"], 2) for x in Ganancias Estimadas_by_country]
+    day_labels = [x["day"] for x in reversed(Ganancias Estimadas_by_day)]
+    day_Ganancias Estimadass = [round(x["Ganancias Estimadas"], 2) for x in reversed(Ganancias Estimadas_by_day)]
 
     app_options = '<option value="all">Todas</option>'
     for a in apps:
@@ -1542,7 +1542,7 @@ def revenue():
     <div class="layout4">
         <div class="compact">
             <h3>Filtro app</h3>
-            <form method="GET" action="/revenue">
+            <form method="GET" action="/Ganancias Estimadas">
                 <select name="app">{app_options}</select>
                 <input type="hidden" name="month" value="{month_filter}">
                 <input type="hidden" name="country" value="{country_filter}">
@@ -1553,7 +1553,7 @@ def revenue():
 
         <div class="compact">
             <h3>Filtro mes</h3>
-            <form method="GET" action="/revenue">
+            <form method="GET" action="/Ganancias Estimadas">
                 <select name="month">{month_options}</select>
                 <input type="hidden" name="app" value="{app_filter}">
                 <input type="hidden" name="country" value="{country_filter}">
@@ -1564,7 +1564,7 @@ def revenue():
 
         <div class="compact">
             <h3>País / distribuidora</h3>
-            <form method="GET" action="/revenue">
+            <form method="GET" action="/Ganancias Estimadas">
                 <div class="hint">País</div>
                 <select name="country">{country_options}</select>
                 <div class="hint" style="margin-top:8px;">Distribuidora</div>
@@ -1578,7 +1578,7 @@ def revenue():
         <div class="compact">
             <h3>Insight ejecutivo</h3>
             <div class="summary-row">
-                <span class="chip">Revenue actual: {format_money(total_revenue)}</span>
+                <span class="chip">Ganancias Estimadas actual: {format_money(total_Ganancias Estimadas)}</span>
                 <span class="chip">Mejor mercado: {best_market}</span>
                 <span class="chip">RPM promedio: {avg_rpm}</span>
             </div>
@@ -1587,12 +1587,12 @@ def revenue():
 
     <div class="grid4">
         <div class="kpi">
-            <div class="kpi-label">Revenue hoy</div>
-            <div class="kpi-value">{format_money(revenue_today)}</div>
+            <div class="kpi-label">Ganancias Estimadas hoy</div>
+            <div class="kpi-value">{format_money(Ganancias Estimadas_today)}</div>
         </div>
         <div class="kpi">
-            <div class="kpi-label">Revenue del contexto</div>
-            <div class="kpi-value">{format_money(revenue_month)}</div>
+            <div class="kpi-label">Ganancias Estimadas del contexto</div>
+            <div class="kpi-value">{format_money(Ganancias Estimadas_month)}</div>
         </div>
         <div class="kpi">
             <div class="kpi-label">RPM promedio</div>
@@ -1605,55 +1605,55 @@ def revenue():
     </div>
 
     <div class="chart-card">
-        <div class="section-title">Revenue por país</div>
-        <canvas id="countryRevenueChart" height="95"></canvas>
+        <div class="section-title">Ganancias Estimadas por país</div>
+        <canvas id="countryGanancias EstimadasChart" height="95"></canvas>
     </div>
 
     <div class="chart-card">
-        <div class="section-title">Revenue trend por día</div>
-        <canvas id="dailyRevenueChart" height="95"></canvas>
+        <div class="section-title">Ganancias Estimadas trend por día</div>
+        <canvas id="dailyGanancias EstimadasChart" height="95"></canvas>
     </div>
 
     <div class="card">
         <div class="section-title">Ranking de países</div>
         <table>
-            <thead><tr><th>País</th><th>Plays</th><th>Revenue</th><th>RPM</th></tr></thead>
-            <tbody>{rows_simple(revenue_by_country, ['country', 'plays', 'revenue', 'rpm'], money_cols=['revenue']) if revenue_by_country else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
+            <thead><tr><th>País</th><th>Plays</th><th>Ganancias Estimadas</th><th>RPM</th></tr></thead>
+            <tbody>{rows_simple(Ganancias Estimadas_by_country, ['country', 'plays', 'Ganancias Estimadas', 'rpm'], money_cols=['Ganancias Estimadas']) if Ganancias Estimadas_by_country else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
 
     <div class="card">
         <div class="section-title">Ranking de artistas</div>
         <table>
-            <thead><tr><th>Artista</th><th>Autor</th><th>Distribuidora</th><th>Plays</th><th>Revenue</th><th>RPM</th></tr></thead>
-            <tbody>{rows_simple(revenue_by_artist, ['artist', 'author', 'distributor', 'plays', 'revenue', 'rpm'], money_cols=['revenue']) if revenue_by_artist else '<tr><td colspan="6">Sin datos</td></tr>'}</tbody>
+            <thead><tr><th>Artista</th><th>Autor</th><th>Distribuidora</th><th>Plays</th><th>Ganancias Estimadas</th><th>RPM</th></tr></thead>
+            <tbody>{rows_simple(Ganancias Estimadas_by_artist, ['artist', 'author', 'distributor', 'plays', 'Ganancias Estimadas', 'rpm'], money_cols=['Ganancias Estimadas']) if Ganancias Estimadas_by_artist else '<tr><td colspan="6">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
 
     <div class="card">
         <div class="section-title">Ranking de distribuidoras</div>
         <table>
-            <thead><tr><th>Distribuidora</th><th>Plays</th><th>Revenue</th><th>RPM</th></tr></thead>
-            <tbody>{rows_simple(revenue_by_distributor, ['distributor', 'plays', 'revenue', 'rpm'], money_cols=['revenue']) if revenue_by_distributor else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
+            <thead><tr><th>Distribuidora</th><th>Plays</th><th>Ganancias Estimadas</th><th>RPM</th></tr></thead>
+            <tbody>{rows_simple(Ganancias Estimadas_by_distributor, ['distributor', 'plays', 'Ganancias Estimadas', 'rpm'], money_cols=['Ganancias Estimadas']) if Ganancias Estimadas_by_distributor else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
 
     <div class="card">
         <div class="section-title">Ganancias por día</div>
         <table>
-            <thead><tr><th>Día</th><th>Plays</th><th>Revenue</th><th>RPM</th></tr></thead>
-            <tbody>{rows_simple(revenue_by_day, ['day', 'plays', 'revenue', 'rpm'], money_cols=['revenue']) if revenue_by_day else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
+            <thead><tr><th>Día</th><th>Plays</th><th>Ganancias Estimadas</th><th>RPM</th></tr></thead>
+            <tbody>{rows_simple(Ganancias Estimadas_by_day, ['day', 'plays', 'Ganancias Estimadas', 'rpm'], money_cols=['Ganancias Estimadas']) if Ganancias Estimadas_by_day else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
 
     <script>
-        new Chart(document.getElementById('countryRevenueChart').getContext('2d'), {{
+        new Chart(document.getElementById('countryGanancias EstimadasChart').getContext('2d'), {{
             type: 'bar',
             data: {{
                 labels: {json.dumps(country_labels)},
                 datasets: [{{
-                    label: 'Revenue',
-                    data: {json.dumps(country_revenues)},
+                    label: 'Ganancias Estimadas',
+                    data: {json.dumps(country_Ganancias Estimadass)},
                     backgroundColor: 'rgba(212,165,20,0.72)',
                     borderColor: '#d4a514',
                     borderWidth: 1
@@ -1669,13 +1669,13 @@ def revenue():
             }}
         }});
 
-        new Chart(document.getElementById('dailyRevenueChart').getContext('2d'), {{
+        new Chart(document.getElementById('dailyGanancias EstimadasChart').getContext('2d'), {{
             type: 'line',
             data: {{
                 labels: {json.dumps(day_labels)},
                 datasets: [{{
-                    label: 'Revenue por día',
-                    data: {json.dumps(day_revenues)},
+                    label: 'Ganancias Estimadas por día',
+                    data: {json.dumps(day_Ganancias Estimadass)},
                     borderColor: '#d4a514',
                     backgroundColor: 'rgba(212,165,20,0.12)',
                     tension: 0.28,
@@ -1694,7 +1694,7 @@ def revenue():
     </script>
     """
 
-    subtitle = build_subtitle("Revenue intelligence", app_filter, month_filter, country_filter, distributor_filter)
+    subtitle = build_subtitle("Ganancias Estimadas intelligence", app_filter, month_filter, country_filter, distributor_filter)
     return render_layout("WatchEagle", body, subtitle)
 
 
