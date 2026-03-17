@@ -6,16 +6,13 @@ import subprocess
 import requests
 import json
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime
 
 app = Flask(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
 
-# =========================
-# CONFIG CATALOGO / RATES
-# =========================
 ARTIST_CATALOG = [
     {"artist": "Jeantune", "author": "Jean C", "distributor": "Distrokid"},
     {"artist": "JCSTUDIO", "author": "Jean C", "distributor": "Distrokid"},
@@ -35,7 +32,6 @@ ARTIST_CATALOG = [
     {"artist": "AEROVIA", "author": "Jean C", "distributor": "Distrokid"},
 ]
 
-ARTIST_LOOKUP = {item["artist"].lower(): item for item in ARTIST_CATALOG}
 DISTRIBUTORS = sorted(list({item["distributor"] for item in ARTIST_CATALOG}))
 COUNTRIES = ["EE", "UK", "CA", "MX", "ES", "DO", "CO", "AR", "CL", "PE", "BR"]
 
@@ -83,9 +79,6 @@ def lastfm_user_exists(username: str) -> bool:
         return False
 
 
-# =========================
-# DB INIT
-# =========================
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
@@ -96,7 +89,7 @@ def init_db():
         name VARCHAR(100) NOT NULL,
         app_name VARCHAR(50) NOT NULL,
         lastfm_user VARCHAR(100) NOT NULL UNIQUE,
-        country_code VARCHAR(5),
+        country_code VARCHAR(10),
         status VARCHAR(20) DEFAULT 'PENDING',
         last_scrobble_at TIMESTAMP NULL,
         last_check_at TIMESTAMP NULL,
@@ -114,7 +107,7 @@ def init_db():
         team_name VARCHAR(100),
         lastfm_user VARCHAR(100),
         app_name VARCHAR(50),
-        country_code VARCHAR(5),
+        country_code VARCHAR(10),
         artist VARCHAR(255),
         track VARCHAR(255),
         album VARCHAR(255),
@@ -123,10 +116,18 @@ def init_db():
     );
     """)
 
-    # Compatibilidad
-    cur.execute("ALTER TABLE teams ADD COLUMN IF NOT EXISTS country_code VARCHAR(5);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS country_code VARCHAR(5);")
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS job_runs (
+        id SERIAL PRIMARY KEY,
+        job_name VARCHAR(100) NOT NULL,
+        status VARCHAR(20) DEFAULT 'OK',
+        message TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
 
+    cur.execute("ALTER TABLE teams ADD COLUMN IF NOT EXISTS country_code VARCHAR(10);")
+    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS country_code VARCHAR(10);")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_id INTEGER;")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_name VARCHAR(100);")
     cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS lastfm_user VARCHAR(100);")
@@ -140,122 +141,13 @@ def init_db():
     cur.execute("""
     DO $$
     BEGIN
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='artist_name'
-        ) AND NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='artist'
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes WHERE indexname = 'idx_scrobbles_unique'
         ) THEN
-            ALTER TABLE scrobbles RENAME COLUMN artist_name TO artist;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='track_name'
-        ) AND NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='track'
-        ) THEN
-            ALTER TABLE scrobbles RENAME COLUMN track_name TO track;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='album_name'
-        ) AND NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='album'
-        ) THEN
-            ALTER TABLE scrobbles RENAME COLUMN album_name TO album;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='scrobble_time'
-        ) AND NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='scrobbled_at'
-        ) THEN
-            ALTER TABLE scrobbles RENAME COLUMN scrobble_time TO scrobbled_at;
+            CREATE UNIQUE INDEX idx_scrobbles_unique
+            ON scrobbles (lastfm_user, artist, track, scrobbled_at);
         END IF;
     END $$;
-    """)
-
-    cur.execute("""
-    DO $$
-    BEGIN
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='artist_name'
-        ) THEN
-            UPDATE scrobbles SET artist = COALESCE(artist, artist_name) WHERE artist IS NULL;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='track_name'
-        ) THEN
-            UPDATE scrobbles SET track = COALESCE(track, track_name) WHERE track IS NULL;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='album_name'
-        ) THEN
-            UPDATE scrobbles SET album = COALESCE(album, album_name) WHERE album IS NULL;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='scrobble_time'
-        ) THEN
-            UPDATE scrobbles SET scrobbled_at = COALESCE(scrobbled_at, scrobble_time) WHERE scrobbled_at IS NULL;
-        END IF;
-    END $$;
-    """)
-
-    cur.execute("""
-    DO $$
-    BEGIN
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='artist_name'
-        ) THEN
-            ALTER TABLE scrobbles ALTER COLUMN artist_name DROP NOT NULL;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='track_name'
-        ) THEN
-            ALTER TABLE scrobbles ALTER COLUMN track_name DROP NOT NULL;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='album_name'
-        ) THEN
-            ALTER TABLE scrobbles ALTER COLUMN album_name DROP NOT NULL;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='scrobbles' AND column_name='scrobble_time'
-        ) THEN
-            ALTER TABLE scrobbles ALTER COLUMN scrobble_time DROP NOT NULL;
-        END IF;
-    END $$;
-    """)
-
-    cur.execute("ALTER TABLE scrobbles ALTER COLUMN artist DROP NOT NULL;")
-    cur.execute("ALTER TABLE scrobbles ALTER COLUMN track DROP NOT NULL;")
-    cur.execute("ALTER TABLE scrobbles ALTER COLUMN album DROP NOT NULL;")
-    cur.execute("ALTER TABLE scrobbles ALTER COLUMN scrobbled_at DROP NOT NULL;")
-
-    cur.execute("""
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_scrobbles_unique
-    ON scrobbles (lastfm_user, artist, track, scrobbled_at);
     """)
 
     conn.commit()
@@ -263,9 +155,60 @@ def init_db():
     conn.close()
 
 
-# =========================
-# HELPERS UI
-# =========================
+def log_job_run(job_name, status="OK", message=""):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO job_runs (job_name, status, message)
+        VALUES (%s, %s, %s)
+    """, (job_name, status, message))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def get_last_job_run(job_name):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT job_name, status, message, created_at
+        FROM job_runs
+        WHERE job_name = %s
+        ORDER BY created_at DESC
+        LIMIT 1
+    """, (job_name,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row
+
+
+def get_now_cards():
+    now = datetime.now()
+
+    last_check = get_last_job_run("run-check")
+    last_collector = get_last_job_run("run-collector")
+    last_backfill = get_last_job_run("run-backfill")
+    last_new_users = get_last_job_run("run-new-users")
+    last_24h = get_last_job_run("run-refresh-24h")
+
+    def fmt(row):
+        if not row or not row.get("created_at"):
+            return "Nunca"
+        return row["created_at"].strftime("%Y-%m-%d %H:%M:%S")
+
+    return {
+        "date_str": now.strftime("%Y-%m-%d"),
+        "time_str": now.strftime("%H:%M:%S"),
+        "updated_str": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "last_check": fmt(last_check),
+        "last_collector": fmt(last_collector),
+        "last_backfill": fmt(last_backfill),
+        "last_new_users": fmt(last_new_users),
+        "last_24h": fmt(last_24h),
+    }
+
+
 def build_subtitle(mode: str, app_filter: str, month_filter: str, country_filter: str, distributor_filter: str):
     parts = [mode]
     parts.append(f"app: {app_filter if app_filter != 'all' else 'todas'}")
@@ -273,48 +216,6 @@ def build_subtitle(mode: str, app_filter: str, month_filter: str, country_filter
     parts.append(f"país: {country_filter if country_filter != 'all' else 'todos'}")
     parts.append(f"distribuidora: {distributor_filter if distributor_filter != 'all' else 'todas'}")
     return " • ".join(parts)
-
-
-def get_now_cards():
-    now = datetime.now()
-    return {
-        "date_str": now.strftime("%Y-%m-%d"),
-        "time_str": now.strftime("%H:%M:%S"),
-        "updated_str": now.strftime("%Y-%m-%d %H:%M:%S")
-    }
-
-
-def rows_simple(items, cols, money_cols=None):
-    money_cols = money_cols or []
-    html = ""
-    for item in items:
-        tds = []
-        for col in cols:
-            value = item.get(col, "-")
-            if col in money_cols:
-                value = format_money(value or 0)
-            tds.append(f"<td>{value}</td>")
-        html += "<tr>" + "".join(tds) + "</tr>"
-    return html
-
-
-def top_artist_bars(items):
-    if not items:
-        return '<div class="hint">Sin datos</div>'
-
-    max_val = max([x["plays"] for x in items], default=1)
-    html = ['<div class="bars">']
-    for item in items:
-        pct = 0 if max_val == 0 else round((item["plays"] / max_val) * 100, 2)
-        html.append(f"""
-        <div class="bar-row">
-            <div class="bar-label">{item['artist']}</div>
-            <div class="bar-track"><div class="bar-fill" style="width:{pct}%;"></div></div>
-            <div class="bar-value">{item['plays']}</div>
-        </div>
-        """)
-    html.append("</div>")
-    return "".join(html)
 
 
 def build_filters():
@@ -348,6 +249,38 @@ def sql_filters(app_filter, month_filter, country_filter):
     return where_sql, params
 
 
+def rows_simple(items, cols, money_cols=None):
+    money_cols = money_cols or []
+    html = ""
+    for item in items:
+        tds = []
+        for col in cols:
+            value = item.get(col, "-")
+            if col in money_cols:
+                value = format_money(value or 0)
+            tds.append(f"<td>{value}</td>")
+        html += "<tr>" + "".join(tds) + "</tr>"
+    return html
+
+
+def top_artist_bars(items):
+    if not items:
+        return '<div class="hint">Sin datos</div>'
+    max_val = max([x["plays"] for x in items], default=1)
+    html = ['<div class="bars">']
+    for item in items:
+        pct = 0 if max_val == 0 else round((item["plays"] / max_val) * 100, 2)
+        html.append(f"""
+        <div class="bar-row">
+            <div class="bar-label">{item['artist']}</div>
+            <div class="bar-track"><div class="bar-fill" style="width:{pct}%;"></div></div>
+            <div class="bar-value">{item['plays']}</div>
+        </div>
+        """)
+    html.append("</div>")
+    return "".join(html)
+
+
 def render_layout(title, body_html, subtitle):
     html = f"""
     <!doctype html>
@@ -364,16 +297,13 @@ def render_layout(title, body_html, subtitle):
                 --text: #0f172a;
                 --soft: #64748b;
                 --gold: #d4a514;
-                --gold2: #facc15;
                 --line: rgba(15,23,42,0.08);
                 --ok: #16a34a;
                 --warn: #ca8a04;
                 --incident: #dc2626;
                 --shadow: 0 10px 26px rgba(15,23,42,0.07);
             }}
-
             * {{ box-sizing: border-box; }}
-
             body {{
                 margin: 0;
                 font-family: Inter, Arial, sans-serif;
@@ -383,12 +313,7 @@ def render_layout(title, body_html, subtitle):
                     linear-gradient(180deg, #faf8ee 0%, var(--bg2) 45%, #f4f0df 100%);
                 padding: 22px;
             }}
-
-            .shell {{
-                max-width: 1620px;
-                margin: 0 auto;
-            }}
-
+            .shell {{ max-width: 1620px; margin: 0 auto; }}
             .top {{
                 display: flex;
                 justify-content: space-between;
@@ -397,32 +322,22 @@ def render_layout(title, body_html, subtitle):
                 margin-bottom: 18px;
                 flex-wrap: wrap;
             }}
-
-            .brand {{
-                display: flex;
-                align-items: center;
-                gap: 0;
-            }}
-
             .brand-title {{
                 font-size: 28px;
                 font-weight: 900;
                 margin: 0;
                 letter-spacing: -0.4px;
             }}
-
             .brand-sub {{
                 font-size: 13px;
                 color: var(--soft);
                 margin-top: 4px;
             }}
-
             .nav {{
                 display: flex;
                 gap: 8px;
                 flex-wrap: wrap;
             }}
-
             .nav a, .nav button, .btn {{
                 border: none;
                 text-decoration: none;
@@ -436,27 +351,18 @@ def render_layout(title, body_html, subtitle):
                 border: 1px solid rgba(212,165,20,0.15);
                 box-shadow: 0 8px 20px rgba(15,23,42,0.05);
             }}
-
-            .btn-gold {{
-                background: linear-gradient(180deg, #f1cc39 0%, #ddb215 100%);
-            }}
-
+            .btn-gold {{ background: linear-gradient(180deg, #f1cc39 0%, #ddb215 100%); }}
             .btn-red {{
                 background: linear-gradient(180deg, #fb7185 0%, #f43f5e 100%);
                 color: white;
             }}
-
-            .btn-orange {{
-                background: linear-gradient(180deg, #f6c14b 0%, #e8aa0f 100%);
-            }}
-
+            .btn-orange {{ background: linear-gradient(180deg, #f6c14b 0%, #e8aa0f 100%); }}
             .card, .kpi, .compact, .chart-card, table {{
                 background: var(--card);
                 border: 1px solid rgba(212,165,20,0.12);
                 box-shadow: var(--shadow);
                 backdrop-filter: blur(6px);
             }}
-
             .update-mini {{
                 background: rgba(255,255,255,0.88);
                 border: 1px solid rgba(212,165,20,0.12);
@@ -467,35 +373,30 @@ def render_layout(title, body_html, subtitle):
                 display: inline-flex;
                 flex-direction: column;
                 gap: 4px;
-                min-width: 220px;
+                min-width: 260px;
             }}
-
             .update-mini .u-label {{
                 font-size: 11px;
                 color: #64748b;
                 font-weight: 700;
             }}
-
             .update-mini .u-value {{
                 font-size: 14px;
                 color: #0f172a;
                 font-weight: 800;
             }}
-
             .grid4 {{
                 display: grid;
                 grid-template-columns: repeat(4, minmax(140px, 1fr));
                 gap: 12px;
                 margin-bottom: 14px;
             }}
-
             .kpi {{
                 border-radius: 18px;
                 padding: 16px;
                 position: relative;
                 overflow: hidden;
             }}
-
             .kpi::before {{
                 content: "";
                 position: absolute;
@@ -503,23 +404,19 @@ def render_layout(title, body_html, subtitle):
                 height: 4px;
                 background: linear-gradient(90deg, rgba(212,165,20,0.85), rgba(250,204,21,0.25));
             }}
-
             .kpi.ok::before {{ background: linear-gradient(90deg, rgba(22,163,74,0.95), rgba(22,163,74,0.24)); }}
             .kpi.warn::before {{ background: linear-gradient(90deg, rgba(202,138,4,0.95), rgba(202,138,4,0.24)); }}
             .kpi.incident::before {{ background: linear-gradient(90deg, rgba(220,38,38,0.95), rgba(220,38,38,0.24)); }}
-
             .kpi-label {{
                 color: var(--soft);
                 font-size: 12px;
                 font-weight: 700;
             }}
-
             .kpi-value {{
                 font-size: 29px;
                 font-weight: 900;
                 margin-top: 8px;
             }}
-
             .layout4 {{
                 display: grid;
                 grid-template-columns: 220px 220px 220px 1fr;
@@ -527,30 +424,25 @@ def render_layout(title, body_html, subtitle):
                 margin-bottom: 14px;
                 align-items: start;
             }}
-
             .compact {{
                 border-radius: 18px;
                 padding: 14px;
             }}
-
             .compact h3 {{
                 margin: 0 0 8px 0;
                 font-size: 15px;
             }}
-
             .hint {{
                 color: var(--soft);
                 font-size: 11px;
                 margin-top: 4px;
             }}
-
             .summary-row {{
                 display: flex;
                 flex-wrap: wrap;
                 gap: 8px;
                 margin-top: 10px;
             }}
-
             .chip {{
                 display: inline-flex;
                 align-items: center;
@@ -563,7 +455,6 @@ def render_layout(title, body_html, subtitle):
                 font-size: 12px;
                 font-weight: 800;
             }}
-
             input, textarea, select {{
                 width: 100%;
                 padding: 10px;
@@ -573,12 +464,10 @@ def render_layout(title, body_html, subtitle):
                 color: #0f172a;
                 font-size: 13px;
             }}
-
             textarea {{
                 min-height: 80px;
                 resize: vertical;
             }}
-
             .inline {{
                 display: flex;
                 gap: 8px;
@@ -586,55 +475,44 @@ def render_layout(title, body_html, subtitle):
                 align-items: center;
                 margin-top: 8px;
             }}
-
             .section-title {{
                 margin: 0 0 8px 0;
                 font-size: 20px;
                 letter-spacing: -0.2px;
             }}
-
             .section-sub {{
                 color: var(--soft);
                 font-size: 12px;
                 margin-bottom: 12px;
             }}
-
             .chart-card, .card {{
                 border-radius: 20px;
                 padding: 16px;
                 margin-bottom: 14px;
             }}
-
             .mini-grid {{
                 display: grid;
                 grid-template-columns: repeat(3, minmax(120px, 1fr));
                 gap: 10px;
             }}
-
             .mini-card {{
                 background: rgba(255,255,255,0.90);
                 border-radius: 14px;
                 padding: 12px;
                 border: 1px solid rgba(212,165,20,0.10);
             }}
-
-            .mini-icon {{
-                font-size: 18px;
-            }}
-
+            .mini-icon {{ font-size: 18px; }}
             .mini-label {{
                 color: var(--soft);
                 font-size: 11px;
                 font-weight: 700;
                 margin-top: 4px;
             }}
-
             .mini-value {{
                 font-size: 22px;
                 font-weight: 900;
                 margin-top: 4px;
             }}
-
             table {{
                 width: 100%;
                 border-collapse: separate;
@@ -643,24 +521,18 @@ def render_layout(title, body_html, subtitle):
                 border-radius: 18px;
                 margin-bottom: 14px;
             }}
-
             th, td {{
                 padding: 11px 12px;
                 border-bottom: 1px solid var(--line);
                 text-align: left;
                 font-size: 13px;
             }}
-
             th {{
                 background: rgba(250,204,21,0.10);
                 color: #5f6775;
                 font-weight: 800;
             }}
-
-            tr:last-child td {{
-                border-bottom: none;
-            }}
-
+            tr:last-child td {{ border-bottom: none; }}
             .status {{
                 display: inline-flex;
                 align-items: center;
@@ -670,29 +542,24 @@ def render_layout(title, body_html, subtitle):
                 font-size: 12px;
                 font-weight: 900;
             }}
-
             .status.ok {{ background: rgba(22,163,74,0.10); color: var(--ok); }}
             .status.warn {{ background: rgba(202,138,4,0.10); color: var(--warn); }}
             .status.incident {{ background: rgba(220,38,38,0.10); color: var(--incident); }}
-
             .bars {{
                 display: flex;
                 flex-direction: column;
                 gap: 12px;
             }}
-
             .bar-row {{
                 display: grid;
                 grid-template-columns: 180px 1fr 80px;
                 gap: 12px;
                 align-items: center;
             }}
-
             .bar-label {{
                 font-size: 13px;
                 font-weight: 700;
             }}
-
             .bar-track {{
                 width: 100%;
                 height: 14px;
@@ -700,20 +567,17 @@ def render_layout(title, body_html, subtitle):
                 border-radius: 999px;
                 overflow: hidden;
             }}
-
             .bar-fill {{
                 height: 100%;
                 background: linear-gradient(90deg, #d8b021 0%, #facc15 60%, #f4df8d 100%);
                 border-radius: 999px;
             }}
-
             .bar-value {{
                 text-align: right;
                 font-weight: 800;
                 color: #334155;
                 font-size: 13px;
             }}
-
             #modal-overlay {{
                 position: fixed;
                 inset: 0;
@@ -723,9 +587,8 @@ def render_layout(title, body_html, subtitle):
                 justify-content: center;
                 z-index: 9999;
             }}
-
             #modal {{
-                width: min(900px, 92vw);
+                width: min(950px, 92vw);
                 max-height: 85vh;
                 overflow: auto;
                 background: white;
@@ -733,7 +596,6 @@ def render_layout(title, body_html, subtitle):
                 padding: 20px;
                 box-shadow: 0 20px 50px rgba(15,23,42,0.25);
             }}
-
             #modal pre {{
                 white-space: pre-wrap;
                 word-break: break-word;
@@ -743,37 +605,22 @@ def render_layout(title, body_html, subtitle):
                 border-radius: 14px;
                 overflow: auto;
             }}
-
             @media (max-width: 1280px) {{
-                .grid4 {{
-                    grid-template-columns: repeat(2, minmax(140px, 1fr));
-                }}
-
-                .mini-grid {{
-                    grid-template-columns: 1fr;
-                }}
-
-                .layout4 {{
-                    grid-template-columns: 1fr;
-                }}
-
-                .bar-row {{
-                    grid-template-columns: 1fr;
-                }}
+                .grid4 {{ grid-template-columns: repeat(2, minmax(140px, 1fr)); }}
+                .mini-grid {{ grid-template-columns: 1fr; }}
+                .layout4 {{ grid-template-columns: 1fr; }}
+                .bar-row {{ grid-template-columns: 1fr; }}
             }}
         </style>
-
         <script>
             function openModal(title, content) {{
                 document.getElementById("modal-title").innerText = title;
                 document.getElementById("modal-body").innerHTML = content;
                 document.getElementById("modal-overlay").style.display = "flex";
             }}
-
             function closeModal() {{
                 document.getElementById("modal-overlay").style.display = "none";
             }}
-
             async function runAction(url, title) {{
                 openModal(title, "<p>Ejecutando...</p>");
                 try {{
@@ -785,7 +632,6 @@ def render_layout(title, body_html, subtitle):
                     document.getElementById("modal-body").innerHTML = "<pre>Error: " + e + "</pre>";
                 }}
             }}
-
             function deleteById() {{
                 const id = document.getElementById("deleteId").value;
                 if (!id) {{
@@ -796,7 +642,6 @@ def render_layout(title, body_html, subtitle):
                     window.location.href = "/delete-team?id=" + id;
                 }}
             }}
-
             function resetAll() {{
                 if (confirm("¿Seguro que quieres borrar TODOS los equipos, TODOS los scrobbles y reiniciar los IDs?")) {{
                     window.location.href = "/reset-teams";
@@ -807,13 +652,10 @@ def render_layout(title, body_html, subtitle):
     <body>
         <div class="shell">
             <div class="top">
-                <div class="brand">
-                    <div>
-                        <div class="brand-title">{title}</div>
-                        <div class="brand-sub">{subtitle}</div>
-                    </div>
+                <div>
+                    <div class="brand-title">{title}</div>
+                    <div class="brand-sub">{subtitle}</div>
                 </div>
-
                 <div class="nav">
                     <a href="/">Monitor</a>
                     <a href="/analytics">Analytics</a>
@@ -821,13 +663,14 @@ def render_layout(title, body_html, subtitle):
                     <button class="btn btn-gold" onclick="window.location.reload()">Refrescar</button>
                     <button class="btn btn-gold" onclick="runAction('/run-check', 'Resultado del chequeo')">Correr chequeo</button>
                     <button class="btn btn-gold" onclick="runAction('/run-collector', 'Resultado del collector')">Correr collector</button>
+                    <button class="btn btn-gold" onclick="runAction('/run-backfill', 'Collector histórico')">Collector histórico</button>
+                    <button class="btn btn-gold" onclick="runAction('/run-new-users', 'Usuarios nuevos')">Usuarios nuevos</button>
+                    <button class="btn btn-gold" onclick="runAction('/run-refresh-24h', 'Refresh últimas 24 horas')">Últimas 24h</button>
                     <button class="btn btn-red" onclick="resetAll()">Borrar todo</button>
                 </div>
             </div>
-
             {body_html}
         </div>
-
         <div id="modal-overlay" onclick="closeModal()">
             <div id="modal" onclick="event.stopPropagation()">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
@@ -843,9 +686,6 @@ def render_layout(title, body_html, subtitle):
     return render_template_string(html)
 
 
-# =========================
-# MONITOR
-# =========================
 @app.route("/")
 def home():
     init_db()
@@ -875,11 +715,9 @@ def home():
     if app_filter != "all":
         where.append("app_name = %s")
         params.append(app_filter)
-
     if status_filter != "all":
         where.append("status = %s")
         params.append(status_filter)
-
     if country_filter != "all":
         where.append("country_code = %s")
         params.append(country_filter)
@@ -973,9 +811,14 @@ def home():
 
     body = f"""
     <div class="update-mini">
-        <div class="u-label">Última actualización</div>
+        <div class="u-label">Última actualización visual</div>
         <div class="u-value">{now_card['updated_str']}</div>
         <div class="u-label">Fecha: {now_card['date_str']} • Hora: {now_card['time_str']}</div>
+        <div class="u-label" style="margin-top:8px;">Último check: {now_card['last_check']}</div>
+        <div class="u-label">Último collector: {now_card['last_collector']}</div>
+        <div class="u-label">Último histórico: {now_card['last_backfill']}</div>
+        <div class="u-label">Últimos usuarios nuevos: {now_card['last_new_users']}</div>
+        <div class="u-label">Últimas 24h: {now_card['last_24h']}</div>
     </div>
 
     <div class="grid4">
@@ -1070,9 +913,6 @@ def home():
     return render_layout("WatchEagle", body, subtitle)
 
 
-# =========================
-# ANALYTICS
-# =========================
 @app.route("/analytics")
 def analytics():
     init_db()
@@ -1103,7 +943,6 @@ def analytics():
     """)
     countries_db = cur.fetchall()
 
-    # KPIs
     cur.execute(f"SELECT COUNT(*) AS c FROM scrobbles WHERE DATE(scrobbled_at)=CURRENT_DATE {where_sql}", params)
     plays_today = cur.fetchone()["c"]
 
@@ -1129,7 +968,6 @@ def analytics():
     diff = plays_today - plays_yesterday
     month_diff = month_current_total - month_previous_total
 
-    # Totales por app
     cur.execute(f"""
         SELECT
             COALESCE(SUM(CASE WHEN LOWER(app_name)='spotify' THEN 1 ELSE 0 END),0) AS spotify_total,
@@ -1140,7 +978,6 @@ def analytics():
     """, params)
     app_totals = cur.fetchone()
 
-    # Tendencia diaria por app
     cur.execute(f"""
         SELECT to_char(DATE(scrobbled_at),'YYYY-MM-DD') AS day_label,
                LOWER(COALESCE(app_name,'unknown')) AS app_name,
@@ -1152,7 +989,6 @@ def analytics():
     """, params)
     daily_by_app_raw = cur.fetchall()
 
-    # Top artistas
     cur.execute(f"""
         SELECT COALESCE(artist,'-') AS artist, COUNT(*) AS plays
         FROM scrobbles
@@ -1163,7 +999,6 @@ def analytics():
     """, params)
     top_artists = cur.fetchall()
 
-    # Top canciones 5
     cur.execute(f"""
         SELECT COALESCE(track,'-') AS track, COALESCE(artist,'-') AS artist, COUNT(*) AS plays
         FROM scrobbles
@@ -1174,7 +1009,6 @@ def analytics():
     """, params)
     top_tracks = cur.fetchall()
 
-    # Comparativa artistas
     cur.execute(f"""
         SELECT
             COALESCE(artist,'-') AS artist,
@@ -1190,7 +1024,6 @@ def analytics():
     """, params)
     compare_artists = cur.fetchall()
 
-    # Plays por equipo
     cur.execute(f"""
         SELECT COALESCE(team_name,'-') AS team_name, COUNT(*) AS plays
         FROM scrobbles
@@ -1201,7 +1034,6 @@ def analytics():
     """, params)
     plays_by_team = cur.fetchall()
 
-    # Catálogo
     cur.execute(f"""
         SELECT COALESCE(artist,'-') AS artist,
                LOWER(COALESCE(app_name,'')) AS app_name,
@@ -1212,7 +1044,6 @@ def analytics():
     """, params)
     catalog_raw = cur.fetchall()
 
-    # Revenue por día
     cur.execute(f"""
         SELECT DATE(scrobbled_at) AS day_label,
                LOWER(COALESCE(app_name,'')) AS app_name,
@@ -1227,13 +1058,8 @@ def analytics():
     cur.close()
     conn.close()
 
-    # series por app
     all_days = sorted(list({row["day_label"] for row in daily_by_app_raw}))
-    app_series = {
-        "spotify": [0] * len(all_days),
-        "tidal": [0] * len(all_days),
-        "apple": [0] * len(all_days),
-    }
+    app_series = {"spotify": [0] * len(all_days), "tidal": [0] * len(all_days), "apple": [0] * len(all_days)}
     day_index = {d: i for i, d in enumerate(all_days)}
 
     for row in daily_by_app_raw:
@@ -1245,7 +1071,6 @@ def analytics():
         elif appn == "apple music":
             app_series["apple"][day_index[day]] = plays
 
-    # catalog rows
     artist_map = defaultdict(lambda: {"plays": 0, "earnings": 0.0})
     for row in catalog_raw:
         artist_map[row["artist"].lower()]["plays"] += row["plays"]
@@ -1265,7 +1090,6 @@ def analytics():
         })
     catalog_rows = sorted(catalog_rows, key=lambda x: x["plays"], reverse=True)
 
-    # earnings daily rows
     earnings_map = defaultdict(lambda: {"plays": 0, "earnings": 0.0})
     for row in earnings_daily_raw:
         day = str(row["day_label"])
@@ -1283,7 +1107,6 @@ def analytics():
 
     current_context_earnings = sum(r["earnings"] for r in catalog_rows)
 
-    # filter options
     app_options = '<option value="all">Todas</option>'
     for a in apps:
         selected = "selected" if a["app_name"] == app_filter else ""
@@ -1307,9 +1130,14 @@ def analytics():
 
     body = f"""
     <div class="update-mini">
-        <div class="u-label">Última actualización</div>
+        <div class="u-label">Última actualización visual</div>
         <div class="u-value">{now_card['updated_str']}</div>
         <div class="u-label">Fecha: {now_card['date_str']} • Hora: {now_card['time_str']}</div>
+        <div class="u-label" style="margin-top:8px;">Último check: {now_card['last_check']}</div>
+        <div class="u-label">Último collector: {now_card['last_collector']}</div>
+        <div class="u-label">Último histórico: {now_card['last_backfill']}</div>
+        <div class="u-label">Últimos usuarios nuevos: {now_card['last_new_users']}</div>
+        <div class="u-label">Últimas 24h: {now_card['last_24h']}</div>
     </div>
 
     <div class="layout4">
@@ -1421,7 +1249,7 @@ def analytics():
     </div>
 
     <div class="card">
-        <div class="section-title">Comparativa artistas: hoy vs ayer + mes actual/anterior</div>
+        <div class="section-title">Comparativa artistas</div>
         <table>
             <thead>
                 <tr>
@@ -1528,9 +1356,6 @@ def analytics():
     return render_layout("WatchEagle", body, subtitle)
 
 
-# =========================
-# REVENUE
-# =========================
 @app.route("/revenue")
 def revenue():
     init_db()
@@ -1562,10 +1387,9 @@ def revenue():
     countries_db = cur.fetchall()
 
     cur.execute(f"""
-        SELECT
-            DATE(scrobbled_at) AS day_label,
-            LOWER(COALESCE(app_name,'')) AS app_name,
-            COUNT(*) AS plays
+        SELECT DATE(scrobbled_at) AS day_label,
+               LOWER(COALESCE(app_name,'')) AS app_name,
+               COUNT(*) AS plays
         FROM scrobbles
         WHERE 1=1 {where_sql}
         GROUP BY DATE(scrobbled_at), LOWER(COALESCE(app_name,''))
@@ -1574,10 +1398,9 @@ def revenue():
     revenue_daily_raw = cur.fetchall()
 
     cur.execute(f"""
-        SELECT
-            COALESCE(country_code, '-') AS country_code,
-            LOWER(COALESCE(app_name,'')) AS app_name,
-            COUNT(*) AS plays
+        SELECT COALESCE(country_code, '-') AS country_code,
+               LOWER(COALESCE(app_name,'')) AS app_name,
+               COUNT(*) AS plays
         FROM scrobbles
         WHERE 1=1 {where_sql}
         GROUP BY country_code, LOWER(COALESCE(app_name,''))
@@ -1586,10 +1409,9 @@ def revenue():
     revenue_country_raw = cur.fetchall()
 
     cur.execute(f"""
-        SELECT
-            COALESCE(artist,'-') AS artist,
-            LOWER(COALESCE(app_name,'')) AS app_name,
-            COUNT(*) AS plays
+        SELECT COALESCE(artist,'-') AS artist,
+               LOWER(COALESCE(app_name,'')) AS app_name,
+               COUNT(*) AS plays
         FROM scrobbles
         WHERE 1=1 {where_sql}
         GROUP BY artist, LOWER(COALESCE(app_name,''))
@@ -1599,7 +1421,6 @@ def revenue():
     cur.close()
     conn.close()
 
-    # by day
     day_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
     for row in revenue_daily_raw:
         day = str(row["day_label"])
@@ -1617,7 +1438,6 @@ def revenue():
             "rpm": 0 if day_map[day]["plays"] == 0 else round((day_map[day]["revenue"] / day_map[day]["plays"]) * 1000, 2)
         })
 
-    # by country
     country_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
     for row in revenue_country_raw:
         country = row["country_code"]
@@ -1636,7 +1456,6 @@ def revenue():
         })
     revenue_by_country = sorted(revenue_by_country, key=lambda x: x["revenue"], reverse=True)
 
-    # by artist / distributor
     artist_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
     distributor_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
     for row in revenue_artist_raw:
@@ -1644,7 +1463,6 @@ def revenue():
         rate = get_rate_for_app(row["app_name"])
         plays = row["plays"]
         revenue_val = plays * rate
-
         artist_map[artist.lower()]["plays"] += plays
         artist_map[artist.lower()]["revenue"] += revenue_val
 
@@ -1685,11 +1503,9 @@ def revenue():
 
     country_labels = [x["country"] for x in revenue_by_country]
     country_revenues = [round(x["revenue"], 2) for x in revenue_by_country]
-
     day_labels = [x["day"] for x in reversed(revenue_by_day)]
     day_revenues = [round(x["revenue"], 2) for x in reversed(revenue_by_day)]
 
-    # options
     app_options = '<option value="all">Todas</option>'
     for a in apps:
         selected = "selected" if a["app_name"] == app_filter else ""
@@ -1713,9 +1529,14 @@ def revenue():
 
     body = f"""
     <div class="update-mini">
-        <div class="u-label">Última actualización</div>
+        <div class="u-label">Última actualización visual</div>
         <div class="u-value">{now_card['updated_str']}</div>
         <div class="u-label">Fecha: {now_card['date_str']} • Hora: {now_card['time_str']}</div>
+        <div class="u-label" style="margin-top:8px;">Último check: {now_card['last_check']}</div>
+        <div class="u-label">Último collector: {now_card['last_collector']}</div>
+        <div class="u-label">Último histórico: {now_card['last_backfill']}</div>
+        <div class="u-label">Últimos usuarios nuevos: {now_card['last_new_users']}</div>
+        <div class="u-label">Últimas 24h: {now_card['last_24h']}</div>
     </div>
 
     <div class="layout4">
@@ -1877,9 +1698,6 @@ def revenue():
     return render_layout("WatchEagle", body, subtitle)
 
 
-# =========================
-# EQUIPOS
-# =========================
 @app.route("/import-real-teams", methods=["POST"])
 def import_real_teams():
     init_db()
@@ -1928,14 +1746,13 @@ def import_real_teams():
     cur.close()
     conn.close()
 
-    return f"Creados: {len(created)}\\nOmitidos: {len(skipped)}\\n\\nCreados:\\n{created}\\n\\nOmitidos:\\n{skipped}"
+    return f"Creados: {len(created)}\nOmitidos: {len(skipped)}\n\nCreados:\n{created}\n\nOmitidos:\n{skipped}"
 
 
 @app.route("/delete-team")
 def delete_team():
     init_db()
     team_id = request.args.get("id")
-
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("DELETE FROM teams WHERE id=%s", (team_id,))
@@ -1960,102 +1777,6 @@ def reset_teams():
     return redirect("/")
 
 
-@app.route("/update-country")
-def update_country():
-    init_db()
-
-    team_id = request.args.get("id")
-    team_name = request.args.get("name")
-    country = (request.args.get("country") or "").strip().upper()
-
-    if not country:
-        return "Falta country", 400
-
-    conn = get_conn()
-    cur = conn.cursor()
-
-    if team_id:
-        cur.execute("""
-            UPDATE teams
-            SET country_code = %s
-            WHERE id = %s
-            RETURNING id, name, country_code
-        """, (country, team_id))
-    elif team_name:
-        cur.execute("""
-            UPDATE teams
-            SET country_code = %s
-            WHERE name = %s
-            RETURNING id, name, country_code
-        """, (country, team_name))
-    else:
-        cur.close()
-        conn.close()
-        return "Debes enviar id o name", 400
-
-    row = cur.fetchone()
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    if not row:
-        return "Equipo no encontrado", 404
-
-    return jsonify({
-        "ok": True,
-        "updated": row
-    })
-
-
-@app.route("/bulk-update-country", methods=["POST"])
-def bulk_update_country():
-    init_db()
-
-    text = request.form.get("lines", "").strip()
-    if not text:
-        return "No se recibió contenido", 400
-
-    lines = [x.strip() for x in text.splitlines() if x.strip()]
-
-    conn = get_conn()
-    cur = conn.cursor()
-
-    updated = []
-    skipped = []
-
-    for line in lines:
-        parts = [p.strip() for p in line.split(",")]
-
-        if len(parts) != 2:
-            skipped.append({"line": line, "reason": "Formato inválido. Usa nombre_equipo,pais"})
-            continue
-
-        team_name = parts[0]
-        country = parts[1].upper()
-
-        cur.execute("""
-            UPDATE teams
-            SET country_code = %s
-            WHERE name = %s
-            RETURNING id, name, country_code
-        """, (country, team_name))
-
-        row = cur.fetchone()
-        if row:
-            updated.append(row)
-        else:
-            skipped.append({"line": line, "reason": "Equipo no encontrado"})
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    return f"Actualizados: {len(updated)}\\nOmitidos: {len(skipped)}\\n\\nActualizados:\\n{updated}\\n\\nOmitidos:\\n{skipped}"
-
-
-# =========================
-# OPERACIÓN
-# =========================
 @app.route("/run-check")
 def run_check():
     try:
@@ -2065,12 +1786,16 @@ def run_check():
             text=True,
             timeout=180
         )
-        output = f"STDOUT:\\n{result.stdout}\\n\\nSTDERR:\\n{result.stderr}"
+        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        log_job_run("run-check", "OK" if result.returncode == 0 else "ERROR", output[:4000])
         return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
     except subprocess.TimeoutExpired:
-        return "Error ejecutando watch_scrobbles.py:\\nTimeout: el chequeo tardó demasiado.", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        msg = "Timeout: el chequeo tardó demasiado."
+        log_job_run("run-check", "ERROR", msg)
+        return f"Error ejecutando watch_scrobbles.py:\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
     except Exception as e:
-        return f"Error ejecutando watch_scrobbles.py:\\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        log_job_run("run-check", "ERROR", str(e))
+        return f"Error ejecutando watch_scrobbles.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/run-collector")
@@ -2082,12 +1807,79 @@ def run_collector():
             text=True,
             timeout=300
         )
-        output = f"STDOUT:\\n{result.stdout}\\n\\nSTDERR:\\n{result.stderr}"
+        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        log_job_run("run-collector", "OK" if result.returncode == 0 else "ERROR", output[:4000])
         return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
     except subprocess.TimeoutExpired:
-        return "Error ejecutando collect_scrobbles.py:\\nTimeout: el collector tardó demasiado.", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        msg = "Timeout: el collector tardó demasiado."
+        log_job_run("run-collector", "ERROR", msg)
+        return f"Error ejecutando collect_scrobbles.py:\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
     except Exception as e:
-        return f"Error ejecutando collect_scrobbles.py:\\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        log_job_run("run-collector", "ERROR", str(e))
+        return f"Error ejecutando collect_scrobbles.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+
+
+@app.route("/run-backfill")
+def run_backfill():
+    try:
+        result = subprocess.run(
+            ["python", "backfill_scrobbles.py"],
+            capture_output=True,
+            text=True,
+            timeout=1800
+        )
+        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        log_job_run("run-backfill", "OK" if result.returncode == 0 else "ERROR", output[:4000])
+        return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
+    except subprocess.TimeoutExpired:
+        msg = "Timeout: el histórico tardó demasiado."
+        log_job_run("run-backfill", "ERROR", msg)
+        return f"Error ejecutando backfill_scrobbles.py:\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+    except Exception as e:
+        log_job_run("run-backfill", "ERROR", str(e))
+        return f"Error ejecutando backfill_scrobbles.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+
+
+@app.route("/run-new-users")
+def run_new_users():
+    try:
+        result = subprocess.run(
+            ["python", "backfill_new_users.py"],
+            capture_output=True,
+            text=True,
+            timeout=1200
+        )
+        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        log_job_run("run-new-users", "OK" if result.returncode == 0 else "ERROR", output[:4000])
+        return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
+    except subprocess.TimeoutExpired:
+        msg = "Timeout: el backfill de usuarios nuevos tardó demasiado."
+        log_job_run("run-new-users", "ERROR", msg)
+        return f"Error ejecutando backfill_new_users.py:\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+    except Exception as e:
+        log_job_run("run-new-users", "ERROR", str(e))
+        return f"Error ejecutando backfill_new_users.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+
+
+@app.route("/run-refresh-24h")
+def run_refresh_24h():
+    try:
+        result = subprocess.run(
+            ["python", "refresh_last_24h.py"],
+            capture_output=True,
+            text=True,
+            timeout=900
+        )
+        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        log_job_run("run-refresh-24h", "OK" if result.returncode == 0 else "ERROR", output[:4000])
+        return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
+    except subprocess.TimeoutExpired:
+        msg = "Timeout: el refresh de 24 horas tardó demasiado."
+        log_job_run("run-refresh-24h", "ERROR", msg)
+        return f"Error ejecutando refresh_last_24h.py:\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+    except Exception as e:
+        log_job_run("run-refresh-24h", "ERROR", str(e))
+        return f"Error ejecutando refresh_last_24h.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/health")
