@@ -32,7 +32,7 @@ ARTIST_CATALOG = [
     {"artist": "AEROVIA", "author": "Jean C", "distributor": "Distrokid"},
 ]
 
-DISTRIBUTORS = sorted(list({item["distributor"] for item in ARTIST_CATALOG}))
+DISTRIBUTORS = sorted({item["distributor"] for item in ARTIST_CATALOG})
 COUNTRIES = ["EE", "UK", "CA", "MX", "ES", "DO", "CO", "AR", "CL", "PE", "BR"]
 
 
@@ -50,7 +50,7 @@ def get_rate_for_app(app_name: str) -> float:
 
 
 def format_money(value):
-    return f"${value:,.2f}"
+    return f"${float(value or 0):,.2f}"
 
 
 def get_conn():
@@ -659,7 +659,7 @@ def render_layout(title, body_html, subtitle):
                 <div class="nav">
                     <a href="/">Monitor</a>
                     <a href="/analytics">Analytics</a>
-                    <a href="/Revenue ">Revenue </a>
+                    <a href="/revenue">Revenue</a>
                     <button class="btn btn-gold" onclick="window.location.reload()">Refrescar</button>
                     <button class="btn btn-gold" onclick="runAction('/run-check', 'Resultado del chequeo')">Correr chequeo</button>
                     <button class="btn btn-gold" onclick="runAction('/run-collector', 'Resultado del collector')">Correr collector</button>
@@ -1273,7 +1273,7 @@ def analytics():
     </div>
 
     <div class="card">
-        <div class="section-title">Catálogo de artistas • plays y Revenue </div>
+        <div class="section-title">Catálogo de artistas • plays y ganancias estimadas</div>
         <div class="section-sub">Spotify = 0.0035 • Tidal = 0.006</div>
         <table>
             <thead>
@@ -1282,7 +1282,7 @@ def analytics():
                     <th>Autor</th>
                     <th>Distribuidora</th>
                     <th>Total plays</th>
-                    <th>Revenue </th>
+                    <th>Ganancias estimadas</th>
                 </tr>
             </thead>
             <tbody>{rows_simple(catalog_rows, ['artist', 'author', 'distributor', 'plays', 'earnings'], money_cols=['earnings']) if catalog_rows else '<tr><td colspan="5">Sin datos</td></tr>'}</tbody>
@@ -1292,7 +1292,7 @@ def analytics():
     <div class="card">
         <div class="section-title">Ganancias por día</div>
         <table>
-            <thead><tr><th>Día</th><th>Total plays</th><th>Revenue </th></tr></thead>
+            <thead><tr><th>Día</th><th>Total plays</th><th>Ganancias estimadas</th></tr></thead>
             <tbody>{rows_simple(daily_earnings_rows, ['day', 'plays', 'earnings'], money_cols=['earnings']) if daily_earnings_rows else '<tr><td colspan="3">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
@@ -1356,8 +1356,8 @@ def analytics():
     return render_layout("WatchEagle", body, subtitle)
 
 
-@app.route("/Revenue ")
-def Revenue ():
+@app.route("/revenue")
+def revenue():
     init_db()
     now_card = get_now_cards()
 
@@ -1395,7 +1395,7 @@ def Revenue ():
         GROUP BY DATE(scrobbled_at), LOWER(COALESCE(app_name,''))
         ORDER BY DATE(scrobbled_at) ASC
     """, params)
-    Revenue_daily_raw = cur.fetchall()
+    revenue_daily_raw = cur.fetchall()
 
     cur.execute(f"""
         SELECT COALESCE(country_code, '-') AS country_code,
@@ -1421,90 +1421,90 @@ def Revenue ():
     cur.close()
     conn.close()
 
-    day_map = defaultdict(lambda: {"plays": 0, "Revenue ": 0.0})
+    day_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
     for row in revenue_daily_raw:
         day = str(row["day_label"])
         rate = get_rate_for_app(row["app_name"])
         plays = row["plays"]
         day_map[day]["plays"] += plays
-        day_map[day]["Revenue "] += plays * rate
+        day_map[day]["revenue"] += plays * rate
 
     revenue_by_day = []
     for day in sorted(day_map.keys(), reverse=True):
         revenue_by_day.append({
             "day": day,
             "plays": day_map[day]["plays"],
-            "Revenue ": day_map[day]["Revenue "],
-            "rpm": 0 if day_map[day]["plays"] == 0 else round((day_map[day]["Revenue "] / day_map[day]["plays"]) * 1000, 2)
+            "revenue": day_map[day]["revenue"],
+            "rpm": 0 if day_map[day]["plays"] == 0 else round((day_map[day]["revenue"] / day_map[day]["plays"]) * 1000, 2)
         })
 
-    country_map = defaultdict(lambda: {"plays": 0, "Revenue ": 0.0})
+    country_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
     for row in revenue_country_raw:
         country = row["country_code"]
         rate = get_rate_for_app(row["app_name"])
         plays = row["plays"]
         country_map[country]["plays"] += plays
-        country_map[country]["Revenue "] += plays * rate
+        country_map[country]["revenue"] += plays * rate
 
     revenue_by_country = []
     for country, vals in country_map.items():
         revenue_by_country.append({
             "country": country,
             "plays": vals["plays"],
-            "Revenue ": vals["Revenue "],
-            "rpm": 0 if vals["plays"] == 0 else round((vals["Revenue "] / vals["plays"]) * 1000, 2)
+            "revenue": vals["revenue"],
+            "rpm": 0 if vals["plays"] == 0 else round((vals["revenue"] / vals["plays"]) * 1000, 2)
         })
-    revenue_by_country = sorted(revenue_by_country, key=lambda x: x["Revenue "], reverse=True)
+    revenue_by_country = sorted(revenue_by_country, key=lambda x: x["revenue"], reverse=True)
 
-    artist_map = defaultdict(lambda: {"plays": 0, "Revenue ": 0.0})
-    distributor_map = defaultdict(lambda: {"plays": 0, "Revenue ": 0.0})
+    artist_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
+    distributor_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
     for row in revenue_artist_raw:
         artist = row["artist"]
         rate = get_rate_for_app(row["app_name"])
         plays = row["plays"]
         revenue_val = plays * rate
         artist_map[artist.lower()]["plays"] += plays
-        artist_map[artist.lower()]["Revenue "] += revenue_val
+        artist_map[artist.lower()]["revenue"] += revenue_val
 
     revenue_by_artist = []
     for item in ARTIST_CATALOG:
         if distributor_filter != "all" and item["distributor"] != distributor_filter:
             continue
-        stats = artist_map.get(item["artist"].lower(), {"plays": 0, "Revenue ": 0.0})
+        stats = artist_map.get(item["artist"].lower(), {"plays": 0, "revenue": 0.0})
         revenue_by_artist.append({
             "artist": item["artist"],
             "author": item["author"],
             "distributor": item["distributor"],
             "plays": stats["plays"],
-            "Revenue ": stats["Revenue "],
-            "rpm": 0 if stats["plays"] == 0 else round((stats["Revenue "] / stats["plays"]) * 1000, 2)
+            "revenue": stats["revenue"],
+            "rpm": 0 if stats["plays"] == 0 else round((stats["revenue"] / stats["plays"]) * 1000, 2)
         })
         distributor_map[item["distributor"]]["plays"] += stats["plays"]
-        distributor_map[item["distributor"]]["Revenue "] += stats["Revenue "]
+        distributor_map[item["distributor"]]["revenue"] += stats["revenue"]
 
-    revenue_by_artist = sorted(revenue_by_artist, key=lambda x: x["Revenue "], reverse=True)
+    revenue_by_artist = sorted(revenue_by_artist, key=lambda x: x["revenue"], reverse=True)
 
     revenue_by_distributor = []
     for dist, vals in distributor_map.items():
         revenue_by_distributor.append({
             "distributor": dist,
             "plays": vals["plays"],
-            "Revenue ": vals["Revenue "],
-            "rpm": 0 if vals["plays"] == 0 else round((vals["Revenue "] / vals["plays"]) * 1000, 2)
+            "revenue": vals["revenue"],
+            "rpm": 0 if vals["plays"] == 0 else round((vals["revenue"] / vals["plays"]) * 1000, 2)
         })
-    revenue_by_distributor = sorted(revenue_by_distributor, key=lambda x: x["Revenue "], reverse=True)
+    revenue_by_distributor = sorted(revenue_by_distributor, key=lambda x: x["revenue"], reverse=True)
 
-    total_Revenue  = sum(x["Revenue "] for x in revenue_by_artist)
-    revenue_today = revenue_by_day[0]["Revenue "] if revenue_by_day else 0.0
-    revenue_month = total_Revenue 
+    total_revenue = sum(x["revenue"] for x in revenue_by_artist)
+    revenue_today = revenue_by_day[0]["revenue"] if revenue_by_day else 0.0
+    revenue_month = total_revenue
     best_market = revenue_by_country[0]["country"] if revenue_by_country else "-"
-    total_plays_Revenue  = sum(x["plays"] for x in revenue_by_artist)
-    avg_rpm = 0 if total_plays_Revenue  == 0 else round((total_Revenue  / total_plays_Revenue ) * 1000, 2)
+    total_plays_revenue = sum(x["plays"] for x in revenue_by_artist)
+    avg_rpm = 0 if total_plays_revenue == 0 else round((total_revenue / total_plays_revenue) * 1000, 2)
 
     country_labels = [x["country"] for x in revenue_by_country]
-    country_Revenue s = [round(x["Revenue "], 2) for x in revenue_by_country]
+    country_revenues = [round(x["revenue"], 2) for x in revenue_by_country]
     day_labels = [x["day"] for x in reversed(revenue_by_day)]
-    day_Revenue s = [round(x["Revenue "], 2) for x in reversed(revenue_by_day)]
+    day_revenues = [round(x["revenue"], 2) for x in reversed(revenue_by_day)]
 
     app_options = '<option value="all">Todas</option>'
     for a in apps:
@@ -1542,7 +1542,7 @@ def Revenue ():
     <div class="layout4">
         <div class="compact">
             <h3>Filtro app</h3>
-            <form method="GET" action="/Revenue ">
+            <form method="GET" action="/revenue">
                 <select name="app">{app_options}</select>
                 <input type="hidden" name="month" value="{month_filter}">
                 <input type="hidden" name="country" value="{country_filter}">
@@ -1553,7 +1553,7 @@ def Revenue ():
 
         <div class="compact">
             <h3>Filtro mes</h3>
-            <form method="GET" action="/Revenue ">
+            <form method="GET" action="/revenue">
                 <select name="month">{month_options}</select>
                 <input type="hidden" name="app" value="{app_filter}">
                 <input type="hidden" name="country" value="{country_filter}">
@@ -1564,7 +1564,7 @@ def Revenue ():
 
         <div class="compact">
             <h3>País / distribuidora</h3>
-            <form method="GET" action="/Revenue ">
+            <form method="GET" action="/revenue">
                 <div class="hint">País</div>
                 <select name="country">{country_options}</select>
                 <div class="hint" style="margin-top:8px;">Distribuidora</div>
@@ -1578,7 +1578,7 @@ def Revenue ():
         <div class="compact">
             <h3>Insight ejecutivo</h3>
             <div class="summary-row">
-                <span class="chip">Revenue  actual: {format_money(total_Revenue )}</span>
+                <span class="chip">Revenue actual: {format_money(total_revenue)}</span>
                 <span class="chip">Mejor mercado: {best_market}</span>
                 <span class="chip">RPM promedio: {avg_rpm}</span>
             </div>
@@ -1587,11 +1587,11 @@ def Revenue ():
 
     <div class="grid4">
         <div class="kpi">
-            <div class="kpi-label">Revenue  hoy</div>
+            <div class="kpi-label">Revenue hoy</div>
             <div class="kpi-value">{format_money(revenue_today)}</div>
         </div>
         <div class="kpi">
-            <div class="kpi-label">Revenue  del contexto</div>
+            <div class="kpi-label">Revenue del contexto</div>
             <div class="kpi-value">{format_money(revenue_month)}</div>
         </div>
         <div class="kpi">
@@ -1605,55 +1605,55 @@ def Revenue ():
     </div>
 
     <div class="chart-card">
-        <div class="section-title">Revenue  por país</div>
-        <canvas id="countryRevenue Chart" height="95"></canvas>
+        <div class="section-title">Revenue por país</div>
+        <canvas id="countryRevenueChart" height="95"></canvas>
     </div>
 
     <div class="chart-card">
-        <div class="section-title">Revenue  trend por día</div>
-        <canvas id="dailyRevenue Chart" height="95"></canvas>
+        <div class="section-title">Revenue trend por día</div>
+        <canvas id="dailyRevenueChart" height="95"></canvas>
     </div>
 
     <div class="card">
         <div class="section-title">Ranking de países</div>
         <table>
-            <thead><tr><th>País</th><th>Plays</th><th>Revenue </th><th>RPM</th></tr></thead>
-            <tbody>{rows_simple(revenue_by_country, ['country', 'plays', 'Revenue ', 'rpm'], money_cols=['Revenue ']) if revenue_by_country else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
+            <thead><tr><th>País</th><th>Plays</th><th>Revenue</th><th>RPM</th></tr></thead>
+            <tbody>{rows_simple(revenue_by_country, ['country', 'plays', 'revenue', 'rpm'], money_cols=['revenue']) if revenue_by_country else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
 
     <div class="card">
         <div class="section-title">Ranking de artistas</div>
         <table>
-            <thead><tr><th>Artista</th><th>Autor</th><th>Distribuidora</th><th>Plays</th><th>Revenue </th><th>RPM</th></tr></thead>
-            <tbody>{rows_simple(revenue_by_artist, ['artist', 'author', 'distributor', 'plays', 'Revenue ', 'rpm'], money_cols=['Revenue ']) if revenue_by_artist else '<tr><td colspan="6">Sin datos</td></tr>'}</tbody>
+            <thead><tr><th>Artista</th><th>Autor</th><th>Distribuidora</th><th>Plays</th><th>Revenue</th><th>RPM</th></tr></thead>
+            <tbody>{rows_simple(revenue_by_artist, ['artist', 'author', 'distributor', 'plays', 'revenue', 'rpm'], money_cols=['revenue']) if revenue_by_artist else '<tr><td colspan="6">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
 
     <div class="card">
         <div class="section-title">Ranking de distribuidoras</div>
         <table>
-            <thead><tr><th>Distribuidora</th><th>Plays</th><th>Revenue </th><th>RPM</th></tr></thead>
-            <tbody>{rows_simple(revenue_by_distributor, ['distributor', 'plays', 'Revenue ', 'rpm'], money_cols=['Revenue ']) if revenue_by_distributor else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
+            <thead><tr><th>Distribuidora</th><th>Plays</th><th>Revenue</th><th>RPM</th></tr></thead>
+            <tbody>{rows_simple(revenue_by_distributor, ['distributor', 'plays', 'revenue', 'rpm'], money_cols=['revenue']) if revenue_by_distributor else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
 
     <div class="card">
         <div class="section-title">Ganancias por día</div>
         <table>
-            <thead><tr><th>Día</th><th>Plays</th><th>Revenue </th><th>RPM</th></tr></thead>
-            <tbody>{rows_simple(revenue_by_day, ['day', 'plays', 'Revenue ', 'rpm'], money_cols=['Revenue ']) if revenue_by_day else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
+            <thead><tr><th>Día</th><th>Plays</th><th>Revenue</th><th>RPM</th></tr></thead>
+            <tbody>{rows_simple(revenue_by_day, ['day', 'plays', 'revenue', 'rpm'], money_cols=['revenue']) if revenue_by_day else '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
 
     <script>
-        new Chart(document.getElementById('countryRevenue Chart').getContext('2d'), {{
+        new Chart(document.getElementById('countryRevenueChart').getContext('2d'), {{
             type: 'bar',
             data: {{
                 labels: {json.dumps(country_labels)},
                 datasets: [{{
-                    label: 'Revenue ',
-                    data: {json.dumps(country_Revenue s)},
+                    label: 'Revenue',
+                    data: {json.dumps(country_revenues)},
                     backgroundColor: 'rgba(212,165,20,0.72)',
                     borderColor: '#d4a514',
                     borderWidth: 1
@@ -1669,13 +1669,13 @@ def Revenue ():
             }}
         }});
 
-        new Chart(document.getElementById('dailyRevenue Chart').getContext('2d'), {{
+        new Chart(document.getElementById('dailyRevenueChart').getContext('2d'), {{
             type: 'line',
             data: {{
                 labels: {json.dumps(day_labels)},
                 datasets: [{{
-                    label: 'Revenue  por día',
-                    data: {json.dumps(day_Revenue s)},
+                    label: 'Revenue por día',
+                    data: {json.dumps(day_revenues)},
                     borderColor: '#d4a514',
                     backgroundColor: 'rgba(212,165,20,0.12)',
                     tension: 0.28,
@@ -1694,7 +1694,7 @@ def Revenue ():
     </script>
     """
 
-    subtitle = build_subtitle("Revenue  intelligence", app_filter, month_filter, country_filter, distributor_filter)
+    subtitle = build_subtitle("Revenue intelligence", app_filter, month_filter, country_filter, distributor_filter)
     return render_layout("WatchEagle", body, subtitle)
 
 
@@ -1746,7 +1746,7 @@ def import_real_teams():
     cur.close()
     conn.close()
 
-    return f"Creados: {len(created)}\nOmitidos: {len(skipped)}\n\nCreados:\n{created}\n\nOmitidos:\n{skipped}"
+    return f"Creados: {len(created)}\\nOmitidos: {len(skipped)}\\n\\nCreados:\\n{created}\\n\\nOmitidos:\\n{skipped}"
 
 
 @app.route("/delete-team")
@@ -1786,16 +1786,16 @@ def run_check():
             text=True,
             timeout=180
         )
-        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        output = f"STDOUT:\\n{result.stdout}\\n\\nSTDERR:\\n{result.stderr}"
         log_job_run("run-check", "OK" if result.returncode == 0 else "ERROR", output[:4000])
         return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
     except subprocess.TimeoutExpired:
         msg = "Timeout: el chequeo tardó demasiado."
         log_job_run("run-check", "ERROR", msg)
-        return f"Error ejecutando watch_scrobbles.py:\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        return f"Error ejecutando watch_scrobbles.py:\\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
     except Exception as e:
         log_job_run("run-check", "ERROR", str(e))
-        return f"Error ejecutando watch_scrobbles.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        return f"Error ejecutando watch_scrobbles.py:\\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/run-collector")
@@ -1807,16 +1807,16 @@ def run_collector():
             text=True,
             timeout=300
         )
-        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        output = f"STDOUT:\\n{result.stdout}\\n\\nSTDERR:\\n{result.stderr}"
         log_job_run("run-collector", "OK" if result.returncode == 0 else "ERROR", output[:4000])
         return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
     except subprocess.TimeoutExpired:
         msg = "Timeout: el collector tardó demasiado."
         log_job_run("run-collector", "ERROR", msg)
-        return f"Error ejecutando collect_scrobbles.py:\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        return f"Error ejecutando collect_scrobbles.py:\\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
     except Exception as e:
         log_job_run("run-collector", "ERROR", str(e))
-        return f"Error ejecutando collect_scrobbles.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        return f"Error ejecutando collect_scrobbles.py:\\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/run-backfill")
@@ -1828,16 +1828,16 @@ def run_backfill():
             text=True,
             timeout=1800
         )
-        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        output = f"STDOUT:\\n{result.stdout}\\n\\nSTDERR:\\n{result.stderr}"
         log_job_run("run-backfill", "OK" if result.returncode == 0 else "ERROR", output[:4000])
         return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
     except subprocess.TimeoutExpired:
         msg = "Timeout: el histórico tardó demasiado."
         log_job_run("run-backfill", "ERROR", msg)
-        return f"Error ejecutando backfill_scrobbles.py:\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        return f"Error ejecutando backfill_scrobbles.py:\\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
     except Exception as e:
         log_job_run("run-backfill", "ERROR", str(e))
-        return f"Error ejecutando backfill_scrobbles.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        return f"Error ejecutando backfill_scrobbles.py:\\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/run-new-users")
@@ -1849,16 +1849,16 @@ def run_new_users():
             text=True,
             timeout=1200
         )
-        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        output = f"STDOUT:\\n{result.stdout}\\n\\nSTDERR:\\n{result.stderr}"
         log_job_run("run-new-users", "OK" if result.returncode == 0 else "ERROR", output[:4000])
         return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
     except subprocess.TimeoutExpired:
         msg = "Timeout: el backfill de usuarios nuevos tardó demasiado."
         log_job_run("run-new-users", "ERROR", msg)
-        return f"Error ejecutando backfill_new_users.py:\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        return f"Error ejecutando backfill_new_users.py:\\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
     except Exception as e:
         log_job_run("run-new-users", "ERROR", str(e))
-        return f"Error ejecutando backfill_new_users.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        return f"Error ejecutando backfill_new_users.py:\\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/run-refresh-24h")
@@ -1870,22 +1870,46 @@ def run_refresh_24h():
             text=True,
             timeout=900
         )
-        output = f"STDOUT:\n{result.stdout}\n\nSTDERR:\n{result.stderr}"
+        output = f"STDOUT:\\n{result.stdout}\\n\\nSTDERR:\\n{result.stderr}"
         log_job_run("run-refresh-24h", "OK" if result.returncode == 0 else "ERROR", output[:4000])
         return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
     except subprocess.TimeoutExpired:
         msg = "Timeout: el refresh de 24 horas tardó demasiado."
         log_job_run("run-refresh-24h", "ERROR", msg)
-        return f"Error ejecutando refresh_last_24h.py:\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        return f"Error ejecutando refresh_last_24h.py:\\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
     except Exception as e:
         log_job_run("run-refresh-24h", "ERROR", str(e))
-        return f"Error ejecutando refresh_last_24h.py:\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+        return f"Error ejecutando refresh_last_24h.py:\\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/health")
 def health():
     init_db()
     return jsonify({"ok": True, "service": "WatchEagle"})
+
+
+@app.route("/version-test")
+def version_test():
+    return {
+        "status": "ok",
+        "message": "WatchEagle deploy nuevo activo",
+        "files_expected": [
+            "backfill_new_users.py",
+            "refresh_last_24h.py",
+            "backfill_scrobbles.py"
+        ]
+    }
+
+
+@app.route("/debug-files")
+def debug_files():
+    return {
+        "cwd": os.getcwd(),
+        "files": sorted(os.listdir(".")),
+        "backfill_new_users_exists": os.path.exists("backfill_new_users.py"),
+        "refresh_last_24h_exists": os.path.exists("refresh_last_24h.py"),
+        "backfill_scrobbles_exists": os.path.exists("backfill_scrobbles.py"),
+    }
 
 
 @app.route("/debug-lastfm")
