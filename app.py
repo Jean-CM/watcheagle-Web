@@ -1128,6 +1128,18 @@ def analytics():
         selected = "selected" if d == distributor_filter else ""
         distributor_options += f'<option value="{d}" {selected}>{d}</option>'
 
+        body = f"""
+    <div class="update-mini">
+        <div class="u-label">Última actualización visual</div>
+        <div class="u-value">{now_card['updated_str']}</div>
+        <div class="u-label">Fecha: {now_card['date_str']} • Hora: {now_card['time_str']}</div>
+        <div class="u-label" style="margin-top:8px;">Último check: {now_card['last_check']}</div>
+        <div class="u-label">Último collector: {now_card['last_collector']}</div>
+        <div class="u-label">Último histórico: {now_card['last_backfill']}</div>
+        <div class="u-label">Últimos usuarios nuevos: {now_card['last_new_users']}</div>
+        <div class="u-label">Últimas 24h: {now_card['last_24h']}</div>
+    </div>
+
     <div class="layout4">
         <div class="compact">
             <h3>Filtro app</h3>
