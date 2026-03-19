@@ -62,21 +62,37 @@ def lastfm_user_exists(username: str) -> bool:
         return False
 
     url = "https://ws.audioscrobbler.com/2.0/"
-    params = {
-        "method": "user.getinfo",
-        "user": username,
-        "api_key": LASTFM_API_KEY,
-        "format": "json"
-    }
 
     try:
-        r = requests.get(url, params=params, timeout=20)
+        params = {
+            "method": "user.getinfo",
+            "user": username,
+            "api_key": LASTFM_API_KEY,
+            "format": "json"
+        }
+        r = requests.get(url, params=params, timeout=15)
         data = r.json()
-        if "error" in data:
-            return False
-        return "user" in data
+        if "user" in data:
+            return True
     except Exception:
-        return False
+        pass
+
+    try:
+        params = {
+            "method": "user.getrecenttracks",
+            "user": username,
+            "api_key": LASTFM_API_KEY,
+            "format": "json",
+            "limit": 1
+        }
+        r = requests.get(url, params=params, timeout=15)
+        data = r.json()
+        if "recenttracks" in data:
+            return True
+    except Exception:
+        pass
+
+    return False
 
 
 def init_db():
@@ -916,7 +932,6 @@ def home():
 @app.route("/analytics")
 def analytics():
     init_db()
-    now_card = get_now_cards()
 
     app_filter, month_filter, country_filter, distributor_filter = build_filters()
     where_sql, params = sql_filters(app_filter, month_filter, country_filter)
@@ -1128,18 +1143,7 @@ def analytics():
         selected = "selected" if d == distributor_filter else ""
         distributor_options += f'<option value="{d}" {selected}>{d}</option>'
 
-        body = f"""
-    <div class="update-mini">
-        <div class="u-label">Última actualización visual</div>
-        <div class="u-value">{now_card['updated_str']}</div>
-        <div class="u-label">Fecha: {now_card['date_str']} • Hora: {now_card['time_str']}</div>
-        <div class="u-label" style="margin-top:8px;">Último check: {now_card['last_check']}</div>
-        <div class="u-label">Último collector: {now_card['last_collector']}</div>
-        <div class="u-label">Último histórico: {now_card['last_backfill']}</div>
-        <div class="u-label">Últimos usuarios nuevos: {now_card['last_new_users']}</div>
-        <div class="u-label">Últimas 24h: {now_card['last_24h']}</div>
-    </div>
-
+    body = f"""
     <div class="layout4">
         <div class="compact">
             <h3>Filtro app</h3>
@@ -1359,7 +1363,6 @@ def analytics():
 @app.route("/revenue")
 def revenue():
     init_db()
-    now_card = get_now_cards()
 
     app_filter, month_filter, country_filter, distributor_filter = build_filters()
     where_sql, params = sql_filters(app_filter, month_filter, country_filter)
@@ -1528,17 +1531,6 @@ def revenue():
         distributor_options += f'<option value="{d}" {selected}>{d}</option>'
 
     body = f"""
-    <div class="update-mini">
-        <div class="u-label">Última actualización visual</div>
-        <div class="u-value">{now_card['updated_str']}</div>
-        <div class="u-label">Fecha: {now_card['date_str']} • Hora: {now_card['time_str']}</div>
-        <div class="u-label" style="margin-top:8px;">Último check: {now_card['last_check']}</div>
-        <div class="u-label">Último collector: {now_card['last_collector']}</div>
-        <div class="u-label">Último histórico: {now_card['last_backfill']}</div>
-        <div class="u-label">Últimos usuarios nuevos: {now_card['last_new_users']}</div>
-        <div class="u-label">Últimas 24h: {now_card['last_24h']}</div>
-    </div>
-
     <div class="layout4">
         <div class="compact">
             <h3>Filtro app</h3>
