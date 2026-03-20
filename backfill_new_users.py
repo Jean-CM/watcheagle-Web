@@ -1,123 +1,68 @@
-import os
-import requests
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from datetime import datetime, timezone
+from helpers import (
+    init_db,
+    get_new_user_teams,
+    fetch_recent_tracks,
+    normalize_tracks_payload,
+    insert_scrobble,
+    BACKFILL_LIMIT,
+    BACKFILL_MAX_PAGES,
+    start_job,
+    finish_job,
+)
 
-DATABASE_URL = os.environ.get("DATABASE_URL")
-LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
-BACKFILL_LIMIT = int(os.environ.get("BACKFILL_LIMIT", "200"))
-BACKFILL_MAX_PAGES = int(os.environ.get("BACKFILL_MAX_PAGES", "10"))
-
-
-def get_conn():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-
-
-def fetch_recent_tracks_page(user, page=1, limit=200):
-    url = "https://ws.audioscrobbler.com/2.0/"
-    params = {
-        "method": "user.getrecenttracks",
-        "user": user,
-        "api_key": LASTFM_API_KEY,
-        "format": "json",
-        "limit": limit,
-        "page": page
-    }
-
-    response = requests.get(url, params=params, timeout=45)
-    data = response.json()
-
-    if "error" in data:
-        raise Exception(f"Last.fm API error {data.get('error')}: {data.get('message')}")
-
-    recenttracks = data.get("recenttracks", {})
-    tracks = recenttracks.get("track", [])
-    attr = recenttracks.get("@attr", {})
-
-    if isinstance(tracks, dict):
-        tracks = [tracks]
-
-    total_pages = int(attr.get("totalPages", 1)) if attr.get("totalPages") else 1
-    return tracks, total_pages
-
-
-def insert_track(cur, team, tr):
-    if tr.get("@attr", {}).get("nowplaying") == "true":
-        return 0
-
-    artist = ((tr.get("artist") or {}).get("#text", "") or "").strip()
-    track = (tr.get("name", "") or "").strip()
-    album = ((tr.get("album") or {}).get("#text", "") or "").strip()
-    uts = ((tr.get("date") or {}).get("uts"))
-
-    if not uts:
-        return 0
-
-    scrobbled_at = datetime.fromtimestamp(int(uts), tz=timezone.utc)
-
-    cur.execute("""
-        INSERT INTO scrobbles (
-            team_id, team_name, lastfm_user, app_name, country_code,
-            artist, track, album, scrobbled_at
-        )
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        ON CONFLICT (lastfm_user, artist, track, scrobbled_at) DO NOTHING
-    """, (
-        team["id"], team["name"], team["lastfm_user"], team["app_name"], team["country_code"],
-        artist if artist else None,
-        track if track else None,
-        album if album else None,
-        scrobbled_at
-    ))
-
-    return 1 if cur.rowcount > 0 else 0
+JOB_NAME = "run-new-users"
 
 
 def main():
-    conn = get_conn()
-    cur = conn.cursor()
+    init_db()
+    job_id = start_job(JOB_NAME, "Backfill de usuarios nuevos iniciado")
 
-    cur.execute("""
-        SELECT t.id, t.name, t.app_name, t.lastfm_user, t.country_code
-        FROM teams t
-        LEFT JOIN scrobbles s ON s.team_id = t.id
-        WHERE t.active = TRUE
-        GROUP BY t.id, t.name, t.app_name, t.lastfm_user, t.country_code
-        HAVING COUNT(s.id) = 0
-        ORDER BY t.id ASC
-    """)
-    teams = cur.fetchall()
-
+    lines = []
     total_inserted = 0
+    errors = 0
+
+    teams = get_new_user_teams()
 
     for team in teams:
-        inserted = 0
         try:
-            page = 1
-            total_pages = 1
+            inserted_for_team = 0
 
-            while page <= total_pages and page <= BACKFILL_MAX_PAGES:
-                tracks, total_pages = fetch_recent_tracks_page(team["lastfm_user"], page=page, limit=BACKFILL_LIMIT)
+            for page in range(1, BACKFILL_MAX_PAGES + 1):
+                data = fetch_recent_tracks(team["lastfm_user"], limit=BACKFILL_LIMIT, page=page)
+
+                if "error" in data:
+                    lines.append(f"[ERROR] Nuevo usuario {team['name']} | {team['lastfm_user']} | Last.fm API error {data.get('error')}: {data.get('message')}")
+                    errors += 1
+                    break
+
+                tracks = normalize_tracks_payload(data)
                 if not tracks:
                     break
 
-                for tr in tracks:
-                    inserted += insert_track(cur, team, tr)
+                page_inserted = 0
+                for item in tracks:
+                    if item["now_playing"]:
+                        continue
+                    if not item.get("scrobbled_at"):
+                        continue
+                    if insert_scrobble(team, item):
+                        inserted_for_team += 1
+                        total_inserted += 1
+                        page_inserted += 1
 
-                page += 1
+                if page_inserted == 0:
+                    break
 
-            conn.commit()
-            total_inserted += inserted
-            print(f"[OK] Nuevo usuario {team['name']} | {team['lastfm_user']} | insertados={inserted}")
+            lines.append(f"[OK] Nuevo usuario {team['name']} | {team['lastfm_user']} | insertados={inserted_for_team}")
         except Exception as e:
-            conn.rollback()
-            print(f"[ERROR] Nuevo usuario {team['name']} | {team['lastfm_user']} | {e}")
+            errors += 1
+            lines.append(f"[ERROR] Nuevo usuario {team['name']} | {team['lastfm_user']} | {str(e)}")
 
-    cur.close()
-    conn.close()
+    lines.append(f"Total insertado para usuarios nuevos: {total_inserted}")
 
-    print(f"Total insertado para usuarios nuevos: {total_inserted}")
+    output = "\n".join(lines)
+    print(output)
+    finish_job(job_id, "OK" if errors == 0 else "ERROR", output)
 
 
 if __name__ == "__main__":
