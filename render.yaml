@@ -1,91 +1,93 @@
 services:
-  # =========================
-  # WEB APP
-  # =========================
   - type: web
     name: watcheagle-web
     env: python
     plan: free
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn app:app"
+    startCommand: "gunicorn app:app --workers 1 --timeout 1800"
     autoDeploy: true
-
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: watcheagle-db
-          property: connectionString
-
+        sync: false
       - key: LASTFM_API_KEY
         sync: false
-
-      - key: ALERT_COOLDOWN_MIN
-        value: "120"
-
-      - key: BACKFILL_LIMIT
-        value: "200"
-
-      - key: BACKFILL_MAX_PAGES
-        value: "10"
-
+      - key: WARN_MIN
+        value: "15"
+      - key: INCIDENT_MIN
+        value: "20"
       - key: COLLECTOR_LIMIT
         value: "100"
-
       - key: COLLECTOR_MAX_PAGES
         value: "4"
-
+      - key: BACKFILL_LIMIT
+        value: "200"
+      - key: BACKFILL_MAX_PAGES
+        value: "10"
       - key: REFRESH_LIMIT
         value: "100"
-
       - key: REFRESH_MAX_PAGES
         value: "3"
 
+  - type: cron
+    name: watcheagle-check
+    env: python
+    schedule: "*/5 * * * *"
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python watch_scrobbles.py"
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: LASTFM_API_KEY
+        sync: false
       - key: WARN_MIN
         value: "15"
-
       - key: INCIDENT_MIN
         value: "20"
 
-  # =========================
-  # CRON: CHECK
-  # =========================
-  - type: cron
-    name: watcheagle-check
-    schedule: "*/5 * * * *"
-    env: python
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python watch_scrobbles.py"
-
-  # =========================
-  # CRON: COLLECTOR
-  # =========================
   - type: cron
     name: watcheagle-collector
-    schedule: "*/10 * * * *"
     env: python
+    schedule: "*/10 * * * *"
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python collect_scrobbles.py"
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: LASTFM_API_KEY
+        sync: false
+      - key: COLLECTOR_LIMIT
+        value: "100"
+      - key: COLLECTOR_MAX_PAGES
+        value: "4"
 
-  # =========================
-  # CRON: REFRESH 24H
-  # =========================
   - type: cron
     name: watcheagle-refresh24h
-    schedule: "0 * * * *"
     env: python
+    schedule: "0 * * * *"
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python refresh_last_24h.py"
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: LASTFM_API_KEY
+        sync: false
+      - key: REFRESH_LIMIT
+        value: "100"
+      - key: REFRESH_MAX_PAGES
+        value: "3"
 
-  # =========================
-  # CRON: NUEVOS USUARIOS
-  # =========================
   - type: cron
     name: watcheagle-new-users
-    schedule: "0 */6 * * *"
     env: python
+    schedule: "0 */6 * * *"
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python backfill_new_users.py"
-
-databases:
-  - name: watcheagle-db
-    plan: free
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: LASTFM_API_KEY
+        sync: false
+      - key: BACKFILL_LIMIT
+        value: "200"
+      - key: BACKFILL_MAX_PAGES
+        value: "10"
