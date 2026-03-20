@@ -1,17 +1,19 @@
 from flask import Flask, request, jsonify, redirect, render_template_string
 import os
-import psycopg2
-from psycopg2.extras import RealDictCursor
-import subprocess
-import requests
 import json
+import subprocess
+import sys
 from collections import defaultdict
-from datetime import datetime
+from helpers import (
+    init_db,
+    get_conn,
+    lastfm_user_exists,
+    get_last_job,
+    get_runtime_file_snapshot,
+    app_rate,
+)
 
 app = Flask(__name__)
-
-DATABASE_URL = os.environ.get("DATABASE_URL")
-LASTFM_API_KEY = os.environ.get("LASTFM_API_KEY")
 
 ARTIST_CATALOG = [
     {"artist": "Jeantune", "author": "Jean C", "distributor": "Distrokid"},
@@ -32,197 +34,44 @@ ARTIST_CATALOG = [
     {"artist": "AEROVIA", "author": "Jean C", "distributor": "Distrokid"},
 ]
 
-DISTRIBUTORS = sorted({item["distributor"] for item in ARTIST_CATALOG})
+DISTRIBUTORS = sorted({x["distributor"] for x in ARTIST_CATALOG})
 COUNTRIES = ["EE", "UK", "CA", "MX", "ES", "DO", "CO", "AR", "CL", "PE", "BR"]
 
 
-def get_rate_for_app(app_name: str) -> float:
-    if not app_name:
-        return 0.0
-    name = app_name.lower().strip()
-    if name == "spotify":
-        return 0.0035
-    if name == "tidal":
-        return 0.006
-    if name in ("apple", "apple music"):
-        return 0.0
-    return 0.0
+def fmt_money(v):
+    return f"${float(v or 0):,.2f}"
 
 
-def format_money(value):
-    return f"${float(value or 0):,.2f}"
+def rows_simple(items, cols, money_cols=None):
+    money_cols = money_cols or []
+    html = ""
+    for item in items:
+        html += "<tr>"
+        for col in cols:
+            val = item.get(col, "-")
+            if col in money_cols:
+                val = fmt_money(val)
+            html += f"<td>{val}</td>"
+        html += "</tr>"
+    return html
 
 
-def get_conn():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-
-
-def lastfm_user_exists(username: str) -> bool:
-    if not username or not LASTFM_API_KEY:
-        return False
-
-    url = "https://ws.audioscrobbler.com/2.0/"
-
-    try:
-        params = {
-            "method": "user.getinfo",
-            "user": username,
-            "api_key": LASTFM_API_KEY,
-            "format": "json"
-        }
-        r = requests.get(url, params=params, timeout=15)
-        data = r.json()
-        if "user" in data:
-            return True
-    except Exception:
-        pass
-
-    try:
-        params = {
-            "method": "user.getrecenttracks",
-            "user": username,
-            "api_key": LASTFM_API_KEY,
-            "format": "json",
-            "limit": 1
-        }
-        r = requests.get(url, params=params, timeout=15)
-        data = r.json()
-        if "recenttracks" in data:
-            return True
-    except Exception:
-        pass
-
-    return False
-
-
-def init_db():
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS teams (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(100) NOT NULL,
-        app_name VARCHAR(50) NOT NULL,
-        lastfm_user VARCHAR(100) NOT NULL UNIQUE,
-        country_code VARCHAR(10),
-        status VARCHAR(20) DEFAULT 'PENDING',
-        last_scrobble_at TIMESTAMP NULL,
-        last_check_at TIMESTAMP NULL,
-        idle_minutes INTEGER DEFAULT 0,
-        last_alert_at TIMESTAMP NULL,
-        active BOOLEAN DEFAULT TRUE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS scrobbles (
-        id SERIAL PRIMARY KEY,
-        team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
-        team_name VARCHAR(100),
-        lastfm_user VARCHAR(100),
-        app_name VARCHAR(50),
-        country_code VARCHAR(10),
-        artist VARCHAR(255),
-        track VARCHAR(255),
-        album VARCHAR(255),
-        scrobbled_at TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS job_runs (
-        id SERIAL PRIMARY KEY,
-        job_name VARCHAR(100) NOT NULL,
-        status VARCHAR(20) DEFAULT 'OK',
-        message TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """)
-
-    cur.execute("ALTER TABLE teams ADD COLUMN IF NOT EXISTS country_code VARCHAR(10);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS country_code VARCHAR(10);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_id INTEGER;")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS team_name VARCHAR(100);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS lastfm_user VARCHAR(100);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS app_name VARCHAR(50);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS artist VARCHAR(255);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS track VARCHAR(255);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS album VARCHAR(255);")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS scrobbled_at TIMESTAMP;")
-    cur.execute("ALTER TABLE scrobbles ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
-
-    cur.execute("""
-    DO $$
-    BEGIN
-        IF NOT EXISTS (
-            SELECT 1 FROM pg_indexes WHERE indexname = 'idx_scrobbles_unique'
-        ) THEN
-            CREATE UNIQUE INDEX idx_scrobbles_unique
-            ON scrobbles (lastfm_user, artist, track, scrobbled_at);
-        END IF;
-    END $$;
-    """)
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-
-def log_job_run(job_name, status="OK", message=""):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO job_runs (job_name, status, message)
-        VALUES (%s, %s, %s)
-    """, (job_name, status, message))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-
-def get_last_job_run(job_name):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT job_name, status, message, created_at
-        FROM job_runs
-        WHERE job_name = %s
-        ORDER BY created_at DESC
-        LIMIT 1
-    """, (job_name,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    return row
-
-
-def get_now_cards():
-    now = datetime.now()
-
-    last_check = get_last_job_run("run-check")
-    last_collector = get_last_job_run("run-collector")
-    last_backfill = get_last_job_run("run-backfill")
-    last_new_users = get_last_job_run("run-new-users")
-    last_24h = get_last_job_run("run-refresh-24h")
-
-    def fmt(row):
-        if not row or not row.get("created_at"):
-            return "Nunca"
-        return row["created_at"].strftime("%Y-%m-%d %H:%M:%S")
-
-    return {
-        "date_str": now.strftime("%Y-%m-%d"),
-        "time_str": now.strftime("%H:%M:%S"),
-        "updated_str": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "last_check": fmt(last_check),
-        "last_collector": fmt(last_collector),
-        "last_backfill": fmt(last_backfill),
-        "last_new_users": fmt(last_new_users),
-        "last_24h": fmt(last_24h),
-    }
+def top_artist_bars(items):
+    if not items:
+        return '<div class="hint">Sin datos</div>'
+    max_val = max([x["plays"] for x in items], default=1)
+    html = ['<div class="bars">']
+    for item in items:
+        pct = 0 if max_val == 0 else round((item["plays"] / max_val) * 100, 2)
+        html.append(f"""
+        <div class="bar-row">
+            <div class="bar-label">{item['artist']}</div>
+            <div class="bar-track"><div class="bar-fill" style="width:{pct}%;"></div></div>
+            <div class="bar-value">{item['plays']}</div>
+        </div>
+        """)
+    html.append("</div>")
+    return "".join(html)
 
 
 def build_subtitle(mode: str, app_filter: str, month_filter: str, country_filter: str, distributor_filter: str):
@@ -265,36 +114,37 @@ def sql_filters(app_filter, month_filter, country_filter):
     return where_sql, params
 
 
-def rows_simple(items, cols, money_cols=None):
-    money_cols = money_cols or []
-    html = ""
-    for item in items:
-        tds = []
-        for col in cols:
-            value = item.get(col, "-")
-            if col in money_cols:
-                value = format_money(value or 0)
-            tds.append(f"<td>{value}</td>")
-        html += "<tr>" + "".join(tds) + "</tr>"
-    return html
+def get_monitor_job_cards():
+    jobs = {
+        "last_check": get_last_job("run-check"),
+        "last_collector": get_last_job("run-collector"),
+        "last_backfill": get_last_job("run-backfill"),
+        "last_new_users": get_last_job("run-new-users"),
+        "last_24h": get_last_job("run-refresh-24h"),
+    }
+
+    def fmt(row):
+        if not row or not row.get("created_at"):
+            return "Nunca"
+        return row["created_at"].strftime("%Y-%m-%d %H:%M:%S")
+
+    return {
+        "last_check": fmt(jobs["last_check"]),
+        "last_collector": fmt(jobs["last_collector"]),
+        "last_backfill": fmt(jobs["last_backfill"]),
+        "last_new_users": fmt(jobs["last_new_users"]),
+        "last_24h": fmt(jobs["last_24h"]),
+    }
 
 
-def top_artist_bars(items):
-    if not items:
-        return '<div class="hint">Sin datos</div>'
-    max_val = max([x["plays"] for x in items], default=1)
-    html = ['<div class="bars">']
-    for item in items:
-        pct = 0 if max_val == 0 else round((item["plays"] / max_val) * 100, 2)
-        html.append(f"""
-        <div class="bar-row">
-            <div class="bar-label">{item['artist']}</div>
-            <div class="bar-track"><div class="bar-fill" style="width:{pct}%;"></div></div>
-            <div class="bar-value">{item['plays']}</div>
-        </div>
-        """)
-    html.append("</div>")
-    return "".join(html)
+def start_script_background(script_name: str):
+    python_bin = sys.executable
+    subprocess.Popen(
+        [python_bin, script_name],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True
+    )
 
 
 def render_layout(title, body_html, subtitle):
@@ -638,7 +488,7 @@ def render_layout(title, body_html, subtitle):
                 document.getElementById("modal-overlay").style.display = "none";
             }}
             async function runAction(url, title) {{
-                openModal(title, "<p>Ejecutando...</p>");
+                openModal(title, "<p>Ejecutando en segundo plano...</p>");
                 try {{
                     const response = await fetch(url);
                     const text = await response.text();
@@ -677,11 +527,11 @@ def render_layout(title, body_html, subtitle):
                     <a href="/analytics">Analytics</a>
                     <a href="/revenue">Revenue</a>
                     <button class="btn btn-gold" onclick="window.location.reload()">Refrescar</button>
-                    <button class="btn btn-gold" onclick="runAction('/run-check', 'Resultado del chequeo')">Correr chequeo</button>
-                    <button class="btn btn-gold" onclick="runAction('/run-collector', 'Resultado del collector')">Correr collector</button>
+                    <button class="btn btn-gold" onclick="runAction('/run-check', 'Chequeo')">Correr chequeo</button>
+                    <button class="btn btn-gold" onclick="runAction('/run-collector', 'Collector')">Correr collector</button>
                     <button class="btn btn-gold" onclick="runAction('/run-backfill', 'Collector histórico')">Collector histórico</button>
                     <button class="btn btn-gold" onclick="runAction('/run-new-users', 'Usuarios nuevos')">Usuarios nuevos</button>
-                    <button class="btn btn-gold" onclick="runAction('/run-refresh-24h', 'Refresh últimas 24 horas')">Últimas 24h</button>
+                    <button class="btn btn-gold" onclick="runAction('/run-refresh-24h', 'Refresh 24h')">Últimas 24h</button>
                     <button class="btn btn-red" onclick="resetAll()">Borrar todo</button>
                 </div>
             </div>
@@ -705,7 +555,7 @@ def render_layout(title, body_html, subtitle):
 @app.route("/")
 def home():
     init_db()
-    now_card = get_now_cards()
+    jobs = get_monitor_job_cards()
 
     app_filter = request.args.get("app", "all")
     status_filter = request.args.get("status", "all")
@@ -790,8 +640,7 @@ def home():
         app_options += f'<option value="{a["app_name"]}" {selected}>{a["app_name"]}</option>'
 
     country_options = '<option value="all">Todos</option>'
-    all_country_values = sorted(set([c["country_code"] for c in countries_db if c["country_code"]] + COUNTRIES))
-    for c in all_country_values:
+    for c in sorted(set([x["country_code"] for x in countries_db if x["country_code"]] + COUNTRIES)):
         selected = "selected" if c == country_filter else ""
         country_options += f'<option value="{c}" {selected}>{c}</option>'
 
@@ -827,14 +676,12 @@ def home():
 
     body = f"""
     <div class="update-mini">
-        <div class="u-label">Última actualización visual</div>
-        <div class="u-value">{now_card['updated_str']}</div>
-        <div class="u-label">Fecha: {now_card['date_str']} • Hora: {now_card['time_str']}</div>
-        <div class="u-label" style="margin-top:8px;">Último check: {now_card['last_check']}</div>
-        <div class="u-label">Último collector: {now_card['last_collector']}</div>
-        <div class="u-label">Último histórico: {now_card['last_backfill']}</div>
-        <div class="u-label">Últimos usuarios nuevos: {now_card['last_new_users']}</div>
-        <div class="u-label">Últimas 24h: {now_card['last_24h']}</div>
+        <div class="u-label">Últimas ejecuciones</div>
+        <div class="u-label">Check: {jobs['last_check']}</div>
+        <div class="u-label">Collector: {jobs['last_collector']}</div>
+        <div class="u-label">Histórico: {jobs['last_backfill']}</div>
+        <div class="u-label">Usuarios nuevos: {jobs['last_new_users']}</div>
+        <div class="u-label">Refresh 24h: {jobs['last_24h']}</div>
     </div>
 
     <div class="grid4">
@@ -843,15 +690,15 @@ def home():
             <div class="kpi-value">{summary['total'] or 0}</div>
         </div>
         <div class="kpi ok">
-            <div class="kpi-label">Semáforo OK</div>
+            <div class="kpi-label">OK</div>
             <div class="kpi-value">{summary['ok_count'] or 0}</div>
         </div>
         <div class="kpi warn">
-            <div class="kpi-label">Semáforo WARN</div>
+            <div class="kpi-label">WARN</div>
             <div class="kpi-value">{summary['warn_count'] or 0}</div>
         </div>
         <div class="kpi incident">
-            <div class="kpi-label">Semáforo INCIDENT</div>
+            <div class="kpi-label">INCIDENT</div>
             <div class="kpi-value">{summary['incident_count'] or 0}</div>
         </div>
     </div>
@@ -874,9 +721,7 @@ def home():
                 <select name="status">{status_options}</select>
                 <div class="hint" style="margin-top:8px;">País</div>
                 <select name="country">{country_options}</select>
-                <div class="inline">
-                    <button class="btn btn-gold" type="submit">Aplicar</button>
-                </div>
+                <div class="inline"><button class="btn btn-gold" type="submit">Aplicar</button></div>
             </form>
         </div>
 
@@ -884,10 +729,8 @@ def home():
             <h3>Importar equipos reales</h3>
             <div class="hint">Formato: Nombre,App,UsuarioLastFM,Pais</div>
             <form method="POST" action="/import-real-teams">
-                <textarea name="lines" placeholder="equipoT01,tidal,equipoS01,EE&#10;equipoG01,spotify,equipoG01,UK"></textarea>
-                <div class="inline">
-                    <button class="btn btn-gold" type="submit">Importar</button>
-                </div>
+                <textarea name="lines" placeholder="equipoS01,Tidal,equipoS01,UK&#10;equipoG01,Spotify,equipoG01,UK"></textarea>
+                <div class="inline"><button class="btn btn-gold" type="submit">Importar</button></div>
             </form>
         </div>
 
@@ -932,7 +775,6 @@ def home():
 @app.route("/analytics")
 def analytics():
     init_db()
-
     app_filter, month_filter, country_filter, distributor_filter = build_filters()
     where_sql, params = sql_filters(app_filter, month_filter, country_filter)
 
@@ -1089,7 +931,7 @@ def analytics():
     artist_map = defaultdict(lambda: {"plays": 0, "earnings": 0.0})
     for row in catalog_raw:
         artist_map[row["artist"].lower()]["plays"] += row["plays"]
-        artist_map[row["artist"].lower()]["earnings"] += row["plays"] * get_rate_for_app(row["app_name"])
+        artist_map[row["artist"].lower()]["earnings"] += row["plays"] * app_rate(row["app_name"])
 
     catalog_rows = []
     for item in ARTIST_CATALOG:
@@ -1108,9 +950,8 @@ def analytics():
     earnings_map = defaultdict(lambda: {"plays": 0, "earnings": 0.0})
     for row in earnings_daily_raw:
         day = str(row["day_label"])
-        rate = get_rate_for_app(row["app_name"])
         earnings_map[day]["plays"] += row["plays"]
-        earnings_map[day]["earnings"] += row["plays"] * rate
+        earnings_map[day]["earnings"] += row["plays"] * app_rate(row["app_name"])
 
     daily_earnings_rows = []
     for day in sorted(earnings_map.keys(), reverse=True):
@@ -1133,8 +974,7 @@ def analytics():
         month_options += f'<option value="{m["month_key"]}" {selected}>{m["month_key"]}</option>'
 
     country_options = '<option value="all">Todos</option>'
-    all_country_values = sorted(set([c["country_code"] for c in countries_db if c["country_code"]] + COUNTRIES))
-    for c in all_country_values:
+    for c in sorted(set([x["country_code"] for x in countries_db if x["country_code"]] + COUNTRIES)):
         selected = "selected" if c == country_filter else ""
         country_options += f'<option value="{c}" {selected}>{c}</option>'
 
@@ -1187,48 +1027,24 @@ def analytics():
                 <span class="chip">Mes: {month_filter if month_filter != 'all' else 'todos'}</span>
                 <span class="chip">País: {country_filter if country_filter != 'all' else 'todos'}</span>
                 <span class="chip">Distribuidora: {distributor_filter if distributor_filter != 'all' else 'todas'}</span>
-                <span class="chip">Ganancias contexto: {format_money(current_context_earnings)}</span>
+                <span class="chip">Ganancias contexto: {fmt_money(current_context_earnings)}</span>
             </div>
         </div>
     </div>
 
     <div class="grid4">
-        <div class="kpi">
-            <div class="kpi-label">Plays hoy</div>
-            <div class="kpi-value">{plays_today}</div>
-        </div>
-        <div class="kpi">
-            <div class="kpi-label">Plays ayer / variación</div>
-            <div class="kpi-value">{plays_yesterday} / {diff}</div>
-        </div>
-        <div class="kpi">
-            <div class="kpi-label">Mes actual / mes anterior</div>
-            <div class="kpi-value">{month_current_total} / {month_previous_total}</div>
-        </div>
-        <div class="kpi">
-            <div class="kpi-label">Variación mensual</div>
-            <div class="kpi-value">{month_diff}</div>
-        </div>
+        <div class="kpi"><div class="kpi-label">Plays hoy</div><div class="kpi-value">{plays_today}</div></div>
+        <div class="kpi"><div class="kpi-label">Plays ayer / variación</div><div class="kpi-value">{plays_yesterday} / {diff}</div></div>
+        <div class="kpi"><div class="kpi-label">Mes actual / mes anterior</div><div class="kpi-value">{month_current_total} / {month_previous_total}</div></div>
+        <div class="kpi"><div class="kpi-label">Variación mensual</div><div class="kpi-value">{month_diff}</div></div>
     </div>
 
     <div class="card">
         <div class="section-title">Tarjetas por app</div>
         <div class="mini-grid">
-            <div class="mini-card">
-                <div class="mini-icon">🟢</div>
-                <div class="mini-label">Spotify</div>
-                <div class="mini-value">{app_totals['spotify_total']}</div>
-            </div>
-            <div class="mini-card">
-                <div class="mini-icon">🔷</div>
-                <div class="mini-label">Tidal</div>
-                <div class="mini-value">{app_totals['tidal_total']}</div>
-            </div>
-            <div class="mini-card">
-                <div class="mini-icon">🍎</div>
-                <div class="mini-label">Apple</div>
-                <div class="mini-value">{app_totals['apple_total']}</div>
-            </div>
+            <div class="mini-card"><div class="mini-icon">🟢</div><div class="mini-label">Spotify</div><div class="mini-value">{app_totals['spotify_total']}</div></div>
+            <div class="mini-card"><div class="mini-icon">🔷</div><div class="mini-label">Tidal</div><div class="mini-value">{app_totals['tidal_total']}</div></div>
+            <div class="mini-card"><div class="mini-icon">🍎</div><div class="mini-label">Apple</div><div class="mini-value">{app_totals['apple_total']}</div></div>
         </div>
     </div>
 
@@ -1240,7 +1056,6 @@ def analytics():
 
     <div class="card">
         <div class="section-title">Top artistas</div>
-        <div class="section-sub">Ranking visual consolidado.</div>
         {top_artist_bars(top_artists)}
     </div>
 
@@ -1255,15 +1070,7 @@ def analytics():
     <div class="card">
         <div class="section-title">Comparativa artistas</div>
         <table>
-            <thead>
-                <tr>
-                    <th>Artista</th>
-                    <th>Hoy</th>
-                    <th>Ayer</th>
-                    <th>Mes actual</th>
-                    <th>Mes anterior</th>
-                </tr>
-            </thead>
+            <thead><tr><th>Artista</th><th>Hoy</th><th>Ayer</th><th>Mes actual</th><th>Mes anterior</th></tr></thead>
             <tbody>{rows_simple(compare_artists, ['artist', 'hoy', 'ayer', 'mes_actual', 'mes_anterior']) if compare_artists else '<tr><td colspan="5">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
@@ -1277,18 +1084,9 @@ def analytics():
     </div>
 
     <div class="card">
-        <div class="section-title">Catálogo de artistas • plays y ganancias estimadas</div>
-        <div class="section-sub">Spotify = 0.0035 • Tidal = 0.006</div>
+        <div class="section-title">Catálogo de artistas</div>
         <table>
-            <thead>
-                <tr>
-                    <th>Artista</th>
-                    <th>Autor</th>
-                    <th>Distribuidora</th>
-                    <th>Total plays</th>
-                    <th>Ganancias estimadas</th>
-                </tr>
-            </thead>
+            <thead><tr><th>Artista</th><th>Autor</th><th>Distribuidora</th><th>Total plays</th><th>Ganancias estimadas</th></tr></thead>
             <tbody>{rows_simple(catalog_rows, ['artist', 'author', 'distributor', 'plays', 'earnings'], money_cols=['earnings']) if catalog_rows else '<tr><td colspan="5">Sin datos</td></tr>'}</tbody>
         </table>
     </div>
@@ -1302,8 +1100,7 @@ def analytics():
     </div>
 
     <script>
-        const ctx = document.getElementById('dailyAppsChart').getContext('2d');
-        new Chart(ctx, {{
+        new Chart(document.getElementById('dailyAppsChart').getContext('2d'), {{
             type: 'line',
             data: {{
                 labels: {json.dumps(all_days)},
@@ -1336,20 +1133,10 @@ def analytics():
             }},
             options: {{
                 responsive: true,
-                plugins: {{
-                    legend: {{
-                        labels: {{ color: '#475569' }}
-                    }}
-                }},
+                plugins: {{ legend: {{ labels: {{ color: '#475569' }} }} }},
                 scales: {{
-                    x: {{
-                        ticks: {{ color: '#64748b' }},
-                        grid: {{ color: 'rgba(15,23,42,0.06)' }}
-                    }},
-                    y: {{
-                        ticks: {{ color: '#64748b' }},
-                        grid: {{ color: 'rgba(15,23,42,0.06)' }}
-                    }}
+                    x: {{ ticks: {{ color: '#64748b' }}, grid: {{ color: 'rgba(15,23,42,0.06)' }} }},
+                    y: {{ ticks: {{ color: '#64748b' }}, grid: {{ color: 'rgba(15,23,42,0.06)' }} }}
                 }}
             }}
         }});
@@ -1363,7 +1150,6 @@ def analytics():
 @app.route("/revenue")
 def revenue():
     init_db()
-
     app_filter, month_filter, country_filter, distributor_filter = build_filters()
     where_sql, params = sql_filters(app_filter, month_filter, country_filter)
 
@@ -1427,10 +1213,9 @@ def revenue():
     day_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
     for row in revenue_daily_raw:
         day = str(row["day_label"])
-        rate = get_rate_for_app(row["app_name"])
-        plays = row["plays"]
-        day_map[day]["plays"] += plays
-        day_map[day]["revenue"] += plays * rate
+        rev = row["plays"] * app_rate(row["app_name"])
+        day_map[day]["plays"] += row["plays"]
+        day_map[day]["revenue"] += rev
 
     revenue_by_day = []
     for day in sorted(day_map.keys(), reverse=True):
@@ -1443,11 +1228,9 @@ def revenue():
 
     country_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
     for row in revenue_country_raw:
-        country = row["country_code"]
-        rate = get_rate_for_app(row["app_name"])
-        plays = row["plays"]
-        country_map[country]["plays"] += plays
-        country_map[country]["revenue"] += plays * rate
+        rev = row["plays"] * app_rate(row["app_name"])
+        country_map[row["country_code"]]["plays"] += row["plays"]
+        country_map[row["country_code"]]["revenue"] += rev
 
     revenue_by_country = []
     for country, vals in country_map.items():
@@ -1461,13 +1244,11 @@ def revenue():
 
     artist_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
     distributor_map = defaultdict(lambda: {"plays": 0, "revenue": 0.0})
+
     for row in revenue_artist_raw:
-        artist = row["artist"]
-        rate = get_rate_for_app(row["app_name"])
-        plays = row["plays"]
-        revenue_val = plays * rate
-        artist_map[artist.lower()]["plays"] += plays
-        artist_map[artist.lower()]["revenue"] += revenue_val
+        rev = row["plays"] * app_rate(row["app_name"])
+        artist_map[row["artist"].lower()]["plays"] += row["plays"]
+        artist_map[row["artist"].lower()]["revenue"] += rev
 
     revenue_by_artist = []
     for item in ARTIST_CATALOG:
@@ -1499,10 +1280,9 @@ def revenue():
 
     total_revenue = sum(x["revenue"] for x in revenue_by_artist)
     revenue_today = revenue_by_day[0]["revenue"] if revenue_by_day else 0.0
-    revenue_month = total_revenue
     best_market = revenue_by_country[0]["country"] if revenue_by_country else "-"
-    total_plays_revenue = sum(x["plays"] for x in revenue_by_artist)
-    avg_rpm = 0 if total_plays_revenue == 0 else round((total_revenue / total_plays_revenue) * 1000, 2)
+    total_plays = sum(x["plays"] for x in revenue_by_artist)
+    avg_rpm = 0 if total_plays == 0 else round((total_revenue / total_plays) * 1000, 2)
 
     country_labels = [x["country"] for x in revenue_by_country]
     country_revenues = [round(x["revenue"], 2) for x in revenue_by_country]
@@ -1520,8 +1300,7 @@ def revenue():
         month_options += f'<option value="{m["month_key"]}" {selected}>{m["month_key"]}</option>'
 
     country_options = '<option value="all">Todos</option>'
-    all_country_values = sorted(set([c["country_code"] for c in countries_db if c["country_code"]] + COUNTRIES))
-    for c in all_country_values:
+    for c in sorted(set([x["country_code"] for x in countries_db if x["country_code"]] + COUNTRIES)):
         selected = "selected" if c == country_filter else ""
         country_options += f'<option value="{c}" {selected}>{c}</option>'
 
@@ -1570,7 +1349,7 @@ def revenue():
         <div class="compact">
             <h3>Insight ejecutivo</h3>
             <div class="summary-row">
-                <span class="chip">Revenue actual: {format_money(total_revenue)}</span>
+                <span class="chip">Revenue actual: {fmt_money(total_revenue)}</span>
                 <span class="chip">Mejor mercado: {best_market}</span>
                 <span class="chip">RPM promedio: {avg_rpm}</span>
             </div>
@@ -1578,22 +1357,10 @@ def revenue():
     </div>
 
     <div class="grid4">
-        <div class="kpi">
-            <div class="kpi-label">Revenue hoy</div>
-            <div class="kpi-value">{format_money(revenue_today)}</div>
-        </div>
-        <div class="kpi">
-            <div class="kpi-label">Revenue del contexto</div>
-            <div class="kpi-value">{format_money(revenue_month)}</div>
-        </div>
-        <div class="kpi">
-            <div class="kpi-label">RPM promedio</div>
-            <div class="kpi-value">{avg_rpm}</div>
-        </div>
-        <div class="kpi">
-            <div class="kpi-label">Mercado top</div>
-            <div class="kpi-value">{best_market}</div>
-        </div>
+        <div class="kpi"><div class="kpi-label">Revenue hoy</div><div class="kpi-value">{fmt_money(revenue_today)}</div></div>
+        <div class="kpi"><div class="kpi-label">Revenue del contexto</div><div class="kpi-value">{fmt_money(total_revenue)}</div></div>
+        <div class="kpi"><div class="kpi-label">RPM promedio</div><div class="kpi-value">{avg_rpm}</div></div>
+        <div class="kpi"><div class="kpi-label">Mercado top</div><div class="kpi-value">{best_market}</div></div>
     </div>
 
     <div class="chart-card">
@@ -1693,13 +1460,11 @@ def revenue():
 @app.route("/import-real-teams", methods=["POST"])
 def import_real_teams():
     init_db()
-
     text = request.form.get("lines", "").strip()
     if not text:
         return "No se recibió contenido", 400
 
     lines = [x.strip() for x in text.splitlines() if x.strip()]
-
     conn = get_conn()
     cur = conn.cursor()
 
@@ -1771,107 +1536,32 @@ def reset_teams():
 
 @app.route("/run-check")
 def run_check():
-    try:
-        result = subprocess.run(
-            ["python", "watch_scrobbles.py"],
-            capture_output=True,
-            text=True,
-            timeout=180
-        )
-        output = f"STDOUT:\\n{result.stdout}\\n\\nSTDERR:\\n{result.stderr}"
-        log_job_run("run-check", "OK" if result.returncode == 0 else "ERROR", output[:4000])
-        return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
-    except subprocess.TimeoutExpired:
-        msg = "Timeout: el chequeo tardó demasiado."
-        log_job_run("run-check", "ERROR", msg)
-        return f"Error ejecutando watch_scrobbles.py:\\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
-    except Exception as e:
-        log_job_run("run-check", "ERROR", str(e))
-        return f"Error ejecutando watch_scrobbles.py:\\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+    start_script_background("watch_scrobbles.py")
+    return "Chequeo iniciado en segundo plano. Refresca en unos segundos y revisa Monitor.", 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/run-collector")
 def run_collector():
-    try:
-        result = subprocess.run(
-            ["python", "collect_scrobbles.py"],
-            capture_output=True,
-            text=True,
-            timeout=300
-        )
-        output = f"STDOUT:\\n{result.stdout}\\n\\nSTDERR:\\n{result.stderr}"
-        log_job_run("run-collector", "OK" if result.returncode == 0 else "ERROR", output[:4000])
-        return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
-    except subprocess.TimeoutExpired:
-        msg = "Timeout: el collector tardó demasiado."
-        log_job_run("run-collector", "ERROR", msg)
-        return f"Error ejecutando collect_scrobbles.py:\\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
-    except Exception as e:
-        log_job_run("run-collector", "ERROR", str(e))
-        return f"Error ejecutando collect_scrobbles.py:\\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+    start_script_background("collect_scrobbles.py")
+    return "Collector iniciado en segundo plano. Refresca en unos segundos y revisa métricas.", 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/run-backfill")
 def run_backfill():
-    try:
-        result = subprocess.run(
-            ["python", "backfill_scrobbles.py"],
-            capture_output=True,
-            text=True,
-            timeout=1800
-        )
-        output = f"STDOUT:\\n{result.stdout}\\n\\nSTDERR:\\n{result.stderr}"
-        log_job_run("run-backfill", "OK" if result.returncode == 0 else "ERROR", output[:4000])
-        return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
-    except subprocess.TimeoutExpired:
-        msg = "Timeout: el histórico tardó demasiado."
-        log_job_run("run-backfill", "ERROR", msg)
-        return f"Error ejecutando backfill_scrobbles.py:\\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
-    except Exception as e:
-        log_job_run("run-backfill", "ERROR", str(e))
-        return f"Error ejecutando backfill_scrobbles.py:\\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+    start_script_background("backfill_scrobbles.py")
+    return "Collector histórico iniciado en segundo plano. Puede tardar varios minutos.", 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/run-new-users")
 def run_new_users():
-    try:
-        result = subprocess.run(
-            ["python", "backfill_new_users.py"],
-            capture_output=True,
-            text=True,
-            timeout=1200
-        )
-        output = f"STDOUT:\\n{result.stdout}\\n\\nSTDERR:\\n{result.stderr}"
-        log_job_run("run-new-users", "OK" if result.returncode == 0 else "ERROR", output[:4000])
-        return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
-    except subprocess.TimeoutExpired:
-        msg = "Timeout: el backfill de usuarios nuevos tardó demasiado."
-        log_job_run("run-new-users", "ERROR", msg)
-        return f"Error ejecutando backfill_new_users.py:\\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
-    except Exception as e:
-        log_job_run("run-new-users", "ERROR", str(e))
-        return f"Error ejecutando backfill_new_users.py:\\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+    start_script_background("backfill_new_users.py")
+    return "Backfill de usuarios nuevos iniciado en segundo plano. Refresca en 15-30 segundos.", 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/run-refresh-24h")
 def run_refresh_24h():
-    try:
-        result = subprocess.run(
-            ["python", "refresh_last_24h.py"],
-            capture_output=True,
-            text=True,
-            timeout=900
-        )
-        output = f"STDOUT:\\n{result.stdout}\\n\\nSTDERR:\\n{result.stderr}"
-        log_job_run("run-refresh-24h", "OK" if result.returncode == 0 else "ERROR", output[:4000])
-        return output, 200, {"Content-Type": "text/plain; charset=utf-8"}
-    except subprocess.TimeoutExpired:
-        msg = "Timeout: el refresh de 24 horas tardó demasiado."
-        log_job_run("run-refresh-24h", "ERROR", msg)
-        return f"Error ejecutando refresh_last_24h.py:\\n{msg}", 500, {"Content-Type": "text/plain; charset=utf-8"}
-    except Exception as e:
-        log_job_run("run-refresh-24h", "ERROR", str(e))
-        return f"Error ejecutando refresh_last_24h.py:\\n{str(e)}", 500, {"Content-Type": "text/plain; charset=utf-8"}
+    start_script_background("refresh_last_24h.py")
+    return "Refresh 24h iniciado en segundo plano. Refresca en unos segundos.", 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 @app.route("/health")
@@ -1895,28 +1585,7 @@ def version_test():
 
 @app.route("/debug-files")
 def debug_files():
-    return {
-        "cwd": os.getcwd(),
-        "files": sorted(os.listdir(".")),
-        "backfill_new_users_exists": os.path.exists("backfill_new_users.py"),
-        "refresh_last_24h_exists": os.path.exists("refresh_last_24h.py"),
-        "backfill_scrobbles_exists": os.path.exists("backfill_scrobbles.py"),
-    }
-
-
-@app.route("/debug-lastfm")
-def debug_lastfm():
-    user = request.args.get("user")
-    url = "https://ws.audioscrobbler.com/2.0/"
-    params = {
-        "method": "user.getrecenttracks",
-        "user": user,
-        "api_key": LASTFM_API_KEY,
-        "format": "json",
-        "limit": 5
-    }
-    r = requests.get(url, params=params, timeout=30)
-    return f"<pre>{r.text}</pre>"
+    return get_runtime_file_snapshot()
 
 
 if __name__ == "__main__":
