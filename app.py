@@ -829,7 +829,7 @@ def analytics():
         SELECT
             COALESCE(SUM(CASE WHEN LOWER(app_name)='spotify' THEN 1 ELSE 0 END),0) AS spotify_total,
             COALESCE(SUM(CASE WHEN LOWER(app_name)='tidal' THEN 1 ELSE 0 END),0) AS tidal_total,
-            COALESCE(SUM(CASE WHEN LOWER(app_name) IN ('apple','apple music') THEN 1 ELSE 0 END),0) AS apple_total
+            COALESCE(SUM(CASE WHEN LOWER(app_name) IN ('You tube','You tube music') THEN 1 ELSE 0 END),0) AS You tube_total
         FROM scrobbles
         WHERE 1=1 {where_sql}
     """, params)
@@ -916,7 +916,7 @@ def analytics():
     conn.close()
 
     all_days = sorted(list({row["day_label"] for row in daily_by_app_raw}))
-    app_series = {"spotify": [0] * len(all_days), "tidal": [0] * len(all_days), "apple": [0] * len(all_days)}
+    app_series = {"spotify": [0] * len(all_days), "tidal": [0] * len(all_days), "You tube": [0] * len(all_days)}
     day_index = {d: i for i, d in enumerate(all_days)}
 
     for row in daily_by_app_raw:
@@ -925,8 +925,8 @@ def analytics():
         plays = row["plays"]
         if appn in app_series:
             app_series[appn][day_index[day]] = plays
-        elif appn == "apple music":
-            app_series["apple"][day_index[day]] = plays
+        elif appn == "You tube music":
+            app_series["You tube"][day_index[day]] = plays
 
     artist_map = defaultdict(lambda: {"plays": 0, "earnings": 0.0})
     for row in catalog_raw:
@@ -1044,13 +1044,13 @@ def analytics():
         <div class="mini-grid">
             <div class="mini-card"><div class="mini-icon">🟢</div><div class="mini-label">Spotify</div><div class="mini-value">{app_totals['spotify_total']}</div></div>
             <div class="mini-card"><div class="mini-icon">🔷</div><div class="mini-label">Tidal</div><div class="mini-value">{app_totals['tidal_total']}</div></div>
-            <div class="mini-card"><div class="mini-icon">🍎</div><div class="mini-label">Apple</div><div class="mini-value">{app_totals['apple_total']}</div></div>
+            <div class="mini-card"><div class="mini-icon">🍎</div><div class="mini-label">You tube</div><div class="mini-value">{app_totals['You tube_total']}</div></div>
         </div>
     </div>
 
     <div class="chart-card">
         <div class="section-title">Tendencia diaria de reproducciones por app</div>
-        <div class="section-sub">Pulso diario segmentado entre Spotify, Tidal y Apple.</div>
+        <div class="section-sub">Pulso diario segmentado entre Spotify, Tidal y You tube.</div>
         <canvas id="dailyAppsChart" height="95"></canvas>
     </div>
 
@@ -1122,8 +1122,8 @@ def analytics():
                         fill: false
                     }},
                     {{
-                        label: 'Apple',
-                        data: {json.dumps(app_series['apple'])},
+                        label: 'You tube',
+                        data: {json.dumps(app_series['You tube'])},
                         borderColor: '#A855F7',
                         backgroundColor: 'rgba(168,85,247,0.10)',
                         tension: 0.28,
