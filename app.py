@@ -1592,3 +1592,28 @@ if __name__ == "__main__":
     init_db()
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+@app.route("/fix-job-runs")
+def fix_job_runs():
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS job_runs (
+            id SERIAL PRIMARY KEY,
+            job_name TEXT,
+            status TEXT,
+            output TEXT,
+            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    cur.execute("""
+        ALTER TABLE job_runs
+        ADD COLUMN IF NOT EXISTS finished_at TIMESTAMP NULL;
+    """)
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({"ok": True, "message": "job_runs corregida"})
