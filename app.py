@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect
 import subprocess
 from helpers import get_conn, init_db
 
@@ -21,13 +21,6 @@ def safe_int(value, default=0):
         return default
 
 
-def safe_float(value, default=0.0):
-    try:
-        return float(value or 0)
-    except Exception:
-        return default
-
-
 def format_money(value):
     return f"${value:,.2f}"
 
@@ -35,6 +28,17 @@ def format_money(value):
 def menu_link(label, view_name, current_view):
     active = "menu-link active" if current_view == view_name else "menu-link"
     return f'<a class="{active}" href="/?view={view_name}">{label}</a>'
+
+
+def badge_style(status):
+    status = (status or "PENDING").upper()
+    if status == "OK":
+        return "#22c55e", "rgba(34,197,94,.15)"
+    if status == "WARN":
+        return "#f59e0b", "rgba(245,158,11,.15)"
+    if status == "INCIDENT":
+        return "#ef4444", "rgba(239,68,68,.15)"
+    return "#94a3b8", "rgba(148,163,184,.15)"
 
 
 def base_page(title, current_view, body_html):
@@ -64,173 +68,297 @@ def base_page(title, current_view, body_html):
             * {{
                 box-sizing: border-box;
             }}
+
             body {{
                 margin: 0;
                 font-family: Arial, sans-serif;
-                background: #071226;
+                background:
+                    radial-gradient(circle at top left, rgba(59,130,246,.10), transparent 28%),
+                    radial-gradient(circle at top right, rgba(168,85,247,.08), transparent 25%),
+                    #061126;
                 color: #e5e7eb;
                 padding: 24px;
             }}
+
             .page {{
-                max-width: 1600px;
+                max-width: 1700px;
                 margin: 0 auto;
             }}
+
             .header {{
                 margin-bottom: 18px;
             }}
+
             .header h1 {{
                 margin: 0;
                 font-size: 30px;
-                font-weight: 800;
+                font-weight: 900;
+                color: #f8fafc;
             }}
+
             .sub {{
-                color: #94a3b8;
+                color: #9fb0c8;
                 margin-top: 6px;
+                font-size: 15px;
             }}
+
             .menu {{
                 display: flex;
                 flex-wrap: wrap;
                 gap: 10px;
                 margin: 18px 0 14px 0;
             }}
+
             .menu-link {{
                 text-decoration: none;
-                color: #c084fc;
-                background: rgba(192,132,252,.08);
-                border: 1px solid rgba(192,132,252,.35);
+                color: #d8b4fe;
+                background: rgba(168,85,247,.08);
+                border: 1px solid rgba(168,85,247,.35);
                 padding: 10px 14px;
-                border-radius: 10px;
+                border-radius: 12px;
                 font-size: 14px;
                 font-weight: 700;
+                transition: .2s ease;
             }}
+
+            .menu-link:hover {{
+                transform: translateY(-1px);
+                border-color: rgba(168,85,247,.6);
+            }}
+
             .menu-link.active {{
-                background: rgba(59,130,246,.14);
-                color: #93c5fd;
-                border-color: rgba(147,197,253,.5);
+                background: rgba(59,130,246,.16);
+                color: #bfdbfe;
+                border-color: rgba(96,165,250,.55);
+                box-shadow: 0 0 0 1px rgba(96,165,250,.15) inset;
             }}
+
             .utilities {{
                 display: flex;
                 flex-wrap: wrap;
                 gap: 10px;
                 margin-bottom: 20px;
             }}
+
             .utilities a {{
                 text-decoration: none;
-                color: #a5b4fc;
-                background: rgba(165,180,252,.08);
-                border: 1px solid rgba(165,180,252,.25);
+                color: #c7d2fe;
+                background: rgba(99,102,241,.08);
+                border: 1px solid rgba(99,102,241,.25);
                 padding: 8px 12px;
                 border-radius: 10px;
                 font-size: 13px;
             }}
+
             .grid {{
                 display: grid;
                 grid-template-columns: repeat(4, 1fr);
                 gap: 14px;
                 margin-bottom: 18px;
             }}
+
             .grid-3 {{
                 display: grid;
                 grid-template-columns: repeat(3, 1fr);
                 gap: 14px;
                 margin-bottom: 18px;
             }}
+
             .grid-2 {{
                 display: grid;
                 grid-template-columns: repeat(2, 1fr);
                 gap: 18px;
                 margin-bottom: 18px;
             }}
+
             .card {{
-                background: #0f1b33;
-                border: 1px solid #1e293b;
-                border-radius: 16px;
+                background: linear-gradient(180deg, rgba(18,32,60,.96), rgba(13,24,47,.98));
+                border: 1px solid rgba(59,130,246,.14);
+                border-radius: 18px;
                 padding: 18px;
-                box-shadow: 0 8px 24px rgba(0,0,0,.18);
+                box-shadow: 0 10px 28px rgba(0,0,0,.22);
             }}
+
             .metric-label {{
-                color: #94a3b8;
+                color: #9fb0c8;
                 font-size: 13px;
                 margin-bottom: 10px;
             }}
+
             .metric-value {{
-                font-size: 30px;
-                font-weight: 800;
+                font-size: 34px;
+                font-weight: 900;
             }}
+
             .ok {{
                 color: #22c55e;
             }}
+
             .warn {{
                 color: #f59e0b;
             }}
+
             .incident {{
                 color: #ef4444;
             }}
-            .pending {{
-                color: #94a3b8;
-            }}
+
             .section-title {{
                 margin: 0 0 12px 0;
-                font-size: 20px;
-                font-weight: 700;
+                font-size: 21px;
+                font-weight: 800;
+                color: #f8fafc;
             }}
+
             table {{
                 width: 100%;
                 border-collapse: collapse;
-                background: #0f1b33;
-                border: 1px solid #1e293b;
-                border-radius: 16px;
+                background: linear-gradient(180deg, rgba(17,28,52,.98), rgba(13,23,44,.98));
+                border: 1px solid rgba(59,130,246,.14);
+                border-radius: 18px;
                 overflow: hidden;
             }}
+
             th {{
-                background: #1a2740;
+                background: rgba(30,41,72,.92);
                 color: #f8fafc;
                 font-weight: 700;
                 font-size: 14px;
                 padding: 14px 12px;
                 text-align: left;
             }}
+
             td {{
                 padding: 13px 12px;
-                border-top: 1px solid #1e293b;
+                border-top: 1px solid rgba(51,65,85,.7);
                 font-size: 14px;
+                vertical-align: top;
             }}
+
             tr:hover td {{
                 background: rgba(255,255,255,.02);
             }}
+
             .badge {{
                 display: inline-block;
                 padding: 5px 10px;
                 border-radius: 999px;
                 font-size: 12px;
-                font-weight: 700;
+                font-weight: 800;
                 letter-spacing: .3px;
             }}
+
             .muted {{
                 color: #94a3b8;
             }}
+
             .mini-row {{
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
                 padding: 10px 0;
-                border-bottom: 1px solid #1e293b;
+                border-bottom: 1px solid rgba(51,65,85,.7);
                 gap: 12px;
             }}
+
             .mini-row:last-child {{
                 border-bottom: 0;
             }}
+
             .tiny {{
                 font-size: 12px;
                 color: #94a3b8;
             }}
+
+            .inline-form {{
+                display: grid;
+                grid-template-columns: 1.2fr 1fr 1.2fr auto;
+                gap: 12px;
+                align-items: end;
+            }}
+
+            .inline-form-2 {{
+                display: grid;
+                grid-template-columns: 1.2fr 1fr 1.2fr auto;
+                gap: 12px;
+                align-items: end;
+            }}
+
+            .field {{
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+            }}
+
+            .field label {{
+                font-size: 12px;
+                color: #9fb0c8;
+                font-weight: 700;
+            }}
+
+            .field input, .field select, .field textarea {{
+                background: #0b1730;
+                color: #f8fafc;
+                border: 1px solid rgba(96,165,250,.22);
+                border-radius: 12px;
+                padding: 12px;
+                outline: none;
+                width: 100%;
+            }}
+
+            .field textarea {{
+                min-height: 100px;
+                resize: vertical;
+            }}
+
+            .btn-primary, .btn-danger, .btn-secondary {{
+                border: 0;
+                border-radius: 12px;
+                padding: 12px 16px;
+                font-weight: 800;
+                cursor: pointer;
+                text-decoration: none;
+                display: inline-block;
+                text-align: center;
+            }}
+
+            .btn-primary {{
+                background: linear-gradient(135deg, #2563eb, #7c3aed);
+                color: white;
+            }}
+
+            .btn-danger {{
+                background: linear-gradient(135deg, #dc2626, #b91c1c);
+                color: white;
+            }}
+
+            .btn-secondary {{
+                background: linear-gradient(135deg, #334155, #1e293b);
+                color: white;
+            }}
+
+            .form-note {{
+                margin-top: 10px;
+                font-size: 12px;
+                color: #94a3b8;
+            }}
+
+            .actions {{
+                display: flex;
+                gap: 8px;
+                flex-wrap: wrap;
+            }}
+
             @media (max-width: 1200px) {{
                 .grid, .grid-3, .grid-2 {{
                     grid-template-columns: 1fr 1fr;
                 }}
+                .inline-form, .inline-form-2 {{
+                    grid-template-columns: 1fr 1fr;
+                }}
             }}
+
             @media (max-width: 760px) {{
-                .grid, .grid-3, .grid-2 {{
+                .grid, .grid-3, .grid-2, .inline-form, .inline-form-2 {{
                     grid-template-columns: 1fr;
                 }}
                 body {{
@@ -260,8 +388,7 @@ def render_monitor(cur):
             COUNT(*) AS total,
             SUM(CASE WHEN status = 'OK' THEN 1 ELSE 0 END) AS ok_count,
             SUM(CASE WHEN status = 'WARN' THEN 1 ELSE 0 END) AS warn_count,
-            SUM(CASE WHEN status = 'INCIDENT' THEN 1 ELSE 0 END) AS incident_count,
-            SUM(CASE WHEN status = 'PENDING' THEN 1 ELSE 0 END) AS pending_count
+            SUM(CASE WHEN status = 'INCIDENT' THEN 1 ELSE 0 END) AS incident_count
         FROM teams
         WHERE active = TRUE
     """)
@@ -290,45 +417,101 @@ def render_monitor(cur):
             idle_minutes,
             last_check_at
         FROM teams
-        WHERE active = TRUE
         ORDER BY id ASC
     """)
     teams = cur.fetchall()
 
     rows = ""
     for t in teams:
-        estado = t["status"] or "PENDING"
-
-        if estado == "OK":
-            badge_color = "#22c55e"
-            badge_bg = "rgba(34,197,94,.15)"
-        elif estado == "WARN":
-            badge_color = "#f59e0b"
-            badge_bg = "rgba(245,158,11,.15)"
-        elif estado == "INCIDENT":
-            badge_color = "#ef4444"
-            badge_bg = "rgba(239,68,68,.15)"
-        else:
-            badge_color = "#94a3b8"
-            badge_bg = "rgba(148,163,184,.15)"
-
+        badge_color, badge_bg = badge_style(t["status"])
         rows += f"""
         <tr>
             <td>{t['id']}</td>
             <td>{t['name']}</td>
             <td>{t['app_name']}</td>
             <td>{t['lastfm_user']}</td>
-            <td><span class="badge" style="color:{badge_color};background:{badge_bg};border:1px solid {badge_color};">{estado}</span></td>
+            <td><span class="badge" style="color:{badge_color};background:{badge_bg};border:1px solid {badge_color};">{t['status'] or 'PENDING'}</span></td>
             <td>{t['last_scrobble_at'] or '-'}</td>
             <td>{t['idle_minutes'] if t['idle_minutes'] is not None else '-'}</td>
             <td>{t['last_check_at'] or '-'}</td>
+            <td>
+                <div class="actions">
+                    <a class="btn-secondary" href="/edit-team-form?id={t['id']}">Editar</a>
+                    <a class="btn-danger" href="/delete-team?id={t['id']}" onclick="return confirm('¿Seguro que deseas borrar este equipo?')">Borrar</a>
+                </div>
+            </td>
         </tr>
         """
 
     if not rows:
-        rows = '<tr><td colspan="8" class="muted" style="text-align:center;">No hay equipos cargados todavía.</td></tr>'
+        rows = '<tr><td colspan="9" class="muted" style="text-align:center;">No hay equipos cargados todavía.</td></tr>'
+
+    add_form = """
+    <div class="card" style="margin-bottom:18px;">
+        <div class="section-title">Agregar usuario Last.fm al monitoreo</div>
+        <form class="inline-form" method="GET" action="/seed-team">
+            <div class="field">
+                <label>Nombre del equipo</label>
+                <input type="text" name="name" placeholder="Ej: Equipo 01" required>
+            </div>
+            <div class="field">
+                <label>App</label>
+                <select name="app" required>
+                    <option value="spotify">spotify</option>
+                    <option value="apple">apple</option>
+                    <option value="tidal">tidal</option>
+                    <option value="youtube">youtube</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Usuario Last.fm</label>
+                <input type="text" name="user" placeholder="Ej: JeanCMP" required>
+            </div>
+            <button class="btn-primary" type="submit">Agregar</button>
+        </form>
+        <div class="form-note">
+            Aquí registras usuarios existentes de Last.fm para que WatchEagle los monitoree.
+        </div>
+    </div>
+    """
+
+    batch_form = """
+    <div class="card" style="margin-bottom:18px;">
+        <div class="section-title">Carga masiva de equipos</div>
+        <form method="GET" action="/seed-batch">
+            <div class="grid-2" style="margin-bottom:12px;">
+                <div class="field">
+                    <label>Prefijo del equipo</label>
+                    <input type="text" name="prefix" placeholder="Ej: Equipo S" required>
+                </div>
+                <div class="field">
+                    <label>App</label>
+                    <select name="app" required>
+                        <option value="spotify">spotify</option>
+                        <option value="apple">apple</option>
+                        <option value="tidal">tidal</option>
+                        <option value="youtube">youtube</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="field" style="margin-bottom:12px;">
+                <label>Usuarios Last.fm separados por coma</label>
+                <textarea name="users" placeholder="equipoS01,equipoS02,equipoS03" required></textarea>
+            </div>
+
+            <button class="btn-primary" type="submit">Cargar varios equipos</button>
+            <div class="form-note">
+                Sí, con esto puedes cargar más de 10 equipos a la vez. Solo separa los usuarios por coma.
+            </div>
+        </form>
+    </div>
+    """
 
     return f"""
+    {add_form}
+    {batch_form}
+
     <div class="grid">
         <div class="card"><div class="metric-label">Monitores activos</div><div class="metric-value">{total}</div></div>
         <div class="card"><div class="metric-label">OK</div><div class="metric-value ok">{ok_count}</div></div>
@@ -353,6 +536,7 @@ def render_monitor(cur):
                 <th>Ultimo scrobble</th>
                 <th>Idle</th>
                 <th>Ultimo check</th>
+                <th>Acciones</th>
             </tr>
         </thead>
         <tbody>
@@ -397,33 +581,6 @@ def render_analisis(cur):
     """)
     top_tracks = cur.fetchall()
 
-    cur.execute("""
-        SELECT
-            DATE(scrobble_time) AS day,
-            COUNT(*) AS plays
-        FROM scrobbles
-        GROUP BY DATE(scrobble_time)
-        ORDER BY day DESC
-        LIMIT 7
-    """)
-    recent_days = cur.fetchall()
-
-    cur.execute("""
-        SELECT
-            artist_name,
-            SUM(CASE WHEN DATE(scrobble_time) = CURRENT_DATE THEN 1 ELSE 0 END) AS today_plays,
-            SUM(CASE WHEN DATE(scrobble_time) = CURRENT_DATE - INTERVAL '1 day' THEN 1 ELSE 0 END) AS yesterday_plays
-        FROM scrobbles
-        GROUP BY artist_name
-        HAVING
-            SUM(CASE WHEN DATE(scrobble_time) = CURRENT_DATE THEN 1 ELSE 0 END) > 0
-            OR
-            SUM(CASE WHEN DATE(scrobble_time) = CURRENT_DATE - INTERVAL '1 day' THEN 1 ELSE 0 END) > 0
-        ORDER BY today_plays DESC, yesterday_plays DESC
-        LIMIT 10
-    """)
-    versus_rows = cur.fetchall()
-
     artists_html = "".join([
         f'<div class="mini-row"><span>{r["artist_name"]}</span><strong>{r["plays"]}</strong></div>'
         for r in top_artists
@@ -433,32 +590,6 @@ def render_analisis(cur):
         f'<div class="mini-row"><span>{r["artist_name"]} - {r["track_name"]}</span><strong>{r["plays"]}</strong></div>'
         for r in top_tracks
     ]) or '<div class="muted">Sin datos todavía.</div>'
-
-    day_rows = ""
-    for r in recent_days:
-        day_rows += f"""
-        <tr>
-            <td>{r['day']}</td>
-            <td>{r['plays']}</td>
-        </tr>
-        """
-    if not day_rows:
-        day_rows = '<tr><td colspan="2" class="muted" style="text-align:center;">Sin datos.</td></tr>'
-
-    versus_html = ""
-    for r in versus_rows:
-        delta = safe_int(r["today_plays"]) - safe_int(r["yesterday_plays"])
-        delta_color = "#22c55e" if delta >= 0 else "#ef4444"
-        versus_html += f"""
-        <tr>
-            <td>{r['artist_name']}</td>
-            <td>{r['today_plays']}</td>
-            <td>{r['yesterday_plays']}</td>
-            <td style="color:{delta_color};font-weight:700;">{delta}</td>
-        </tr>
-        """
-    if not versus_html:
-        versus_html = '<tr><td colspan="4" class="muted" style="text-align:center;">Sin datos.</td></tr>'
 
     return f"""
     <div class="grid">
@@ -477,24 +608,6 @@ def render_analisis(cur):
         <div class="card">
             <div class="section-title">Top canciones hoy</div>
             {tracks_html}
-        </div>
-    </div>
-
-    <div class="grid-2">
-        <div>
-            <div class="section-title">Plays por dia (ultimos 7 dias)</div>
-            <table>
-                <thead><tr><th>Dia</th><th>Plays</th></tr></thead>
-                <tbody>{day_rows}</tbody>
-            </table>
-        </div>
-
-        <div>
-            <div class="section-title">Artistas hoy vs ayer</div>
-            <table>
-                <thead><tr><th>Artista</th><th>Hoy</th><th>Ayer</th><th>Delta</th></tr></thead>
-                <tbody>{versus_html}</tbody>
-            </table>
         </div>
     </div>
     """
@@ -519,10 +632,7 @@ def render_ganancias(cur):
     for r in platform_rows:
         platform = (r["platform"] or "").strip().lower()
         plays = safe_int(r["plays"])
-
-        rate = PLATFORM_RATES.get(platform)
-        if not rate:
-            rate = PLATFORM_RATES.get("spotify")
+        rate = PLATFORM_RATES.get(platform, PLATFORM_RATES["spotify"])
 
         est_min = plays * rate["min"]
         est_max = plays * rate["max"]
@@ -548,23 +658,6 @@ def render_ganancias(cur):
     if not table_rows:
         table_rows = '<tr><td colspan="7" class="muted" style="text-align:center;">Sin datos para calcular ganancias.</td></tr>'
 
-    cur.execute("""
-        SELECT
-            team_name,
-            COUNT(*) AS plays
-        FROM scrobbles
-        WHERE DATE_TRUNC('month', scrobble_time) = DATE_TRUNC('month', CURRENT_DATE)
-        GROUP BY team_name
-        ORDER BY plays DESC
-        LIMIT 10
-    """)
-    top_teams = cur.fetchall()
-
-    team_html = "".join([
-        f'<div class="mini-row"><span>{r["team_name"]}</span><strong>{r["plays"]}</strong></div>'
-        for r in top_teams
-    ]) or '<div class="muted">Sin datos todavía.</div>'
-
     return f"""
     <div class="grid-3">
         <div class="card">
@@ -581,35 +674,21 @@ def render_ganancias(cur):
         </div>
     </div>
 
-    <div class="grid-2">
-        <div>
-            <div class="section-title">Ganancias estimadas por plataforma</div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Plataforma</th>
-                        <th>Streams</th>
-                        <th>Pago min / stream</th>
-                        <th>Pago max / stream</th>
-                        <th>Min estimado</th>
-                        <th>Max estimado</th>
-                        <th>Promedio estimado</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {table_rows}
-                </tbody>
-            </table>
-        </div>
-
-        <div class="card">
-            <div class="section-title">Promedios por equipo (mes)</div>
-            {team_html}
-            <div class="tiny" style="margin-top:14px;">
-                Basado en rangos estimados que definiste por plataforma.
-            </div>
-        </div>
-    </div>
+    <div class="section-title">Ganancias estimadas por plataforma</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Plataforma</th>
+                <th>Streams</th>
+                <th>Pago min / stream</th>
+                <th>Pago max / stream</th>
+                <th>Min estimado</th>
+                <th>Max estimado</th>
+                <th>Promedio estimado</th>
+            </tr>
+        </thead>
+        <tbody>{table_rows}</tbody>
+    </table>
     """
 
 
@@ -637,13 +716,7 @@ def render_monitor_plays(cur):
         plays = safe_int(r["plays_mes"])
         faltan = 1000 - plays
         recomendacion = faltan
-
-        if plays >= 800:
-            color = "#f59e0b"
-            label = "PUSH"
-        else:
-            color = "#ef4444"
-            label = "CRITICO"
+        color = "#f59e0b" if plays >= 800 else "#ef4444"
 
         table_rows += f"""
         <tr>
@@ -651,11 +724,7 @@ def render_monitor_plays(cur):
             <td>{r['track_name']}</td>
             <td>{plays}</td>
             <td>{faltan}</td>
-            <td>
-                <span class="badge" style="color:{color};background:rgba(255,255,255,.04);border:1px solid {color};">
-                    Dar {recomendacion} reproducciones
-                </span>
-            </td>
+            <td><span class="badge" style="color:{color};background:rgba(255,255,255,.04);border:1px solid {color};">Dar {recomendacion} reproducciones</span></td>
         </tr>
         """
 
@@ -664,18 +733,9 @@ def render_monitor_plays(cur):
 
     return f"""
     <div class="grid-3">
-        <div class="card">
-            <div class="metric-label">Canciones debajo de 1000</div>
-            <div class="metric-value">{total_under}</div>
-        </div>
-        <div class="card">
-            <div class="metric-label">Cerca de meta (800+)</div>
-            <div class="metric-value warn">{near_goal}</div>
-        </div>
-        <div class="card">
-            <div class="metric-label">Criticas (&lt;800)</div>
-            <div class="metric-value incident">{critical}</div>
-        </div>
+        <div class="card"><div class="metric-label">Canciones debajo de 1000</div><div class="metric-value">{total_under}</div></div>
+        <div class="card"><div class="metric-label">Cerca de meta (800+)</div><div class="metric-value warn">{near_goal}</div></div>
+        <div class="card"><div class="metric-label">Criticas (&lt;800)</div><div class="metric-value incident">{critical}</div></div>
     </div>
 
     <div class="section-title">Seguimiento de canciones con menos de 1000 plays</div>
@@ -689,9 +749,7 @@ def render_monitor_plays(cur):
                 <th>Recomendacion</th>
             </tr>
         </thead>
-        <tbody>
-            {table_rows}
-        </tbody>
+        <tbody>{table_rows}</tbody>
     </table>
     """
 
@@ -728,6 +786,183 @@ def home():
         return f"<pre>ERROR EN HOME:\\n{str(e)}</pre>", 500
 
 
+@app.route("/edit-team-form")
+def edit_team_form():
+    try:
+        team_id = request.args.get("id")
+        if not team_id:
+            return "Falta id", 400
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, name, app_name, lastfm_user
+            FROM teams
+            WHERE id = %s
+        """, (team_id,))
+        team = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not team:
+            return "Equipo no encontrado", 404
+
+        return f"""
+        <html>
+        <head><title>Editar equipo</title></head>
+        <body style="background:#061126;color:white;font-family:Arial;padding:24px;">
+            <h2>Editar equipo #{team['id']}</h2>
+            <form method="GET" action="/update-team" style="max-width:600px;">
+                <input type="hidden" name="id" value="{team['id']}">
+
+                <div style="margin-bottom:12px;">
+                    <label>Nombre del equipo</label><br>
+                    <input type="text" name="name" value="{team['name']}" style="width:100%;padding:12px;border-radius:10px;">
+                </div>
+
+                <div style="margin-bottom:12px;">
+                    <label>App</label><br>
+                    <input type="text" name="app" value="{team['app_name']}" style="width:100%;padding:12px;border-radius:10px;">
+                </div>
+
+                <div style="margin-bottom:12px;">
+                    <label>Usuario Last.fm</label><br>
+                    <input type="text" name="user" value="{team['lastfm_user']}" style="width:100%;padding:12px;border-radius:10px;">
+                </div>
+
+                <button type="submit" style="padding:12px 16px;border-radius:10px;background:#2563eb;color:white;border:0;font-weight:700;">Guardar cambios</button>
+                <a href="/?view=monitor" style="margin-left:10px;color:#c4b5fd;">Volver</a>
+            </form>
+        </body>
+        </html>
+        """
+    except Exception as e:
+        return f"<pre>{str(e)}</pre>", 500
+
+
+@app.route("/update-team")
+def update_team():
+    try:
+        team_id = request.args.get("id")
+        name = request.args.get("name")
+        app_name = request.args.get("app")
+        user = request.args.get("user")
+
+        if not team_id or not name or not app_name or not user:
+            return jsonify({"ok": False, "error": "Faltan parámetros"}), 400
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE teams
+            SET name = %s, app_name = %s, lastfm_user = %s
+            WHERE id = %s
+        """, (name, app_name, user, team_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return redirect("/?view=monitor")
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/delete-team")
+def delete_team():
+    try:
+        team_id = request.args.get("id")
+        if not team_id:
+            return jsonify({"ok": False, "error": "Falta id"}), 400
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM teams WHERE id = %s", (team_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return redirect("/?view=monitor")
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/seed-team")
+def seed_team():
+    try:
+        init_db()
+        name = request.args.get("name")
+        app_name = request.args.get("app")
+        user = request.args.get("user")
+
+        if not name or not app_name or not user:
+            return jsonify({"ok": False, "error": "Usa /seed-team?name=Equipo%2001&app=spotify&user=JeanCMP"}), 400
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO teams(name, app_name, lastfm_user)
+            VALUES(%s, %s, %s)
+            ON CONFLICT (lastfm_user) DO NOTHING
+            RETURNING id, name, app_name, lastfm_user
+        """, (name, app_name, user))
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        if request.headers.get("Accept", "").find("text/html") >= 0:
+            return redirect("/?view=monitor")
+        return jsonify({"ok": True, "created": row})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/seed-batch")
+def seed_batch():
+    try:
+        prefix = (request.args.get("prefix") or "").strip()
+        app_name = (request.args.get("app") or "").strip()
+        users_raw = request.args.get("users") or ""
+
+        if not prefix or not app_name or not users_raw:
+            return jsonify({"ok": False, "error": "Usa prefix, app y users"}), 400
+
+        users = [u.strip() for u in users_raw.split(",") if u.strip()]
+        if not users:
+            return jsonify({"ok": False, "error": "No hay usuarios válidos"}), 400
+
+        conn = get_conn()
+        cur = conn.cursor()
+
+        created = []
+        for idx, user in enumerate(users, start=1):
+            team_name = f"{prefix} {idx:02d}"
+            cur.execute("""
+                INSERT INTO teams(name, app_name, lastfm_user)
+                VALUES(%s, %s, %s)
+                ON CONFLICT (lastfm_user) DO NOTHING
+                RETURNING id, name, app_name, lastfm_user
+            """, (team_name, app_name, user))
+            row = cur.fetchone()
+            if row:
+                created.append(row)
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        if request.headers.get("Accept", "").find("text/html") >= 0:
+            return redirect("/?view=monitor")
+
+        return jsonify({
+            "ok": True,
+            "created_count": len(created),
+            "rows": created
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/ping")
 def ping():
     return jsonify({"ok": True, "msg": "pong"})
@@ -748,17 +983,9 @@ def healthz():
         row = cur.fetchone()
         cur.close()
         conn.close()
-
-        return jsonify({
-            "ok": True,
-            "database": "connected",
-            "teams": row["total"]
-        })
+        return jsonify({"ok": True, "database": "connected", "teams": row["total"]})
     except Exception as e:
-        return jsonify({
-            "ok": False,
-            "error": str(e)
-        }), 500
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/fix-job-runs")
@@ -766,7 +993,6 @@ def fix_job_runs():
     try:
         conn = get_conn()
         cur = conn.cursor()
-
         cur.execute("""
         CREATE TABLE IF NOT EXISTS job_runs (
             id SERIAL PRIMARY KEY,
@@ -777,53 +1003,14 @@ def fix_job_runs():
             finished_at TIMESTAMP NULL
         );
         """)
-
         cur.execute("""
         ALTER TABLE job_runs
         ADD COLUMN IF NOT EXISTS finished_at TIMESTAMP NULL;
         """)
-
         conn.commit()
         cur.close()
         conn.close()
-
         return jsonify({"ok": True, "message": "job_runs corregida"})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
-@app.route("/seed-team")
-def seed_team():
-    try:
-        init_db()
-
-        name = request.args.get("name")
-        app_name = request.args.get("app")
-        user = request.args.get("user")
-
-        if not name or not app_name or not user:
-            return jsonify({
-                "ok": False,
-                "error": "Usa /seed-team?name=Equipo%2001&app=spotify&user=JeanCMP"
-            }), 400
-
-        conn = get_conn()
-        cur = conn.cursor()
-
-        cur.execute("""
-        INSERT INTO teams(name, app_name, lastfm_user)
-        VALUES(%s, %s, %s)
-        ON CONFLICT (lastfm_user) DO NOTHING
-        RETURNING id, name, app_name, lastfm_user
-        """, (name, app_name, user))
-
-        row = cur.fetchone()
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        return jsonify({"ok": True, "created": row})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -860,13 +1047,10 @@ def scrobbles_count():
         init_db()
         conn = get_conn()
         cur = conn.cursor()
-
         cur.execute("SELECT COUNT(*) AS total FROM scrobbles")
         row = cur.fetchone()
-
         cur.close()
         conn.close()
-
         return jsonify({"ok": True, "total": row["total"]})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -878,7 +1062,6 @@ def tracks_under_1000():
         init_db()
         conn = get_conn()
         cur = conn.cursor()
-
         cur.execute("""
             SELECT
                 artist_name,
@@ -890,7 +1073,6 @@ def tracks_under_1000():
             HAVING COUNT(*) < 1000
             ORDER BY plays_mes DESC, artist_name ASC, track_name ASC
         """)
-
         rows = cur.fetchall()
         cur.close()
         conn.close()
