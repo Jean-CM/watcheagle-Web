@@ -305,5 +305,40 @@ def scrobbles_count():
 
 if __name__ == "__main__":
     init_db()
+
+    @app.route("/init-business-tables")
+def init_business_tables():
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS playlists (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            owner TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS playlist_tracks (
+            id SERIAL PRIMARY KEY,
+            playlist_id INTEGER REFERENCES playlists(id) ON DELETE CASCADE,
+            artist_name TEXT NOT NULL,
+            track_name TEXT NOT NULL,
+            target_plays INTEGER DEFAULT 1000,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (playlist_id, artist_name, track_name)
+        );
+        """)
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
