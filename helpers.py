@@ -14,12 +14,12 @@ def init_db():
     cur = conn.cursor()
 
     # =========================
-    # TEAMS
+    # Tabla teams
     # =========================
     cur.execute("""
     CREATE TABLE IF NOT EXISTS teams (
         id SERIAL PRIMARY KEY,
-        name VARCHAR(50) NOT NULL,
+        name VARCHAR(100) NOT NULL,
         app_name VARCHAR(50) NOT NULL,
         lastfm_user VARCHAR(100) NOT NULL UNIQUE,
         status VARCHAR(20) DEFAULT 'PENDING',
@@ -33,13 +33,13 @@ def init_db():
     """)
 
     # =========================
-    # SCROBBLES
+    # Tabla scrobbles
     # =========================
     cur.execute("""
     CREATE TABLE IF NOT EXISTS scrobbles (
         id SERIAL PRIMARY KEY,
         team_id INTEGER REFERENCES teams(id) ON DELETE CASCADE,
-        team_name VARCHAR(50),
+        team_name VARCHAR(100),
         lastfm_user VARCHAR(100),
         app_name VARCHAR(50),
         artist_name TEXT,
@@ -66,7 +66,7 @@ def init_db():
     """)
 
     # =========================
-    # JOB RUNS
+    # Tabla job_runs
     # =========================
     cur.execute("""
     CREATE TABLE IF NOT EXISTS job_runs (
@@ -78,6 +78,79 @@ def init_db():
         finished_at TIMESTAMP NULL
     );
     """)
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def get_active_teams():
+    init_db()
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT
+            id,
+            name,
+            app_name,
+            lastfm_user,
+            status,
+            last_scrobble_at,
+            last_check_at,
+            idle_minutes,
+            last_alert_at,
+            active,
+            created_at
+        FROM teams
+        WHERE active = TRUE
+        ORDER BY id ASC
+    """)
+
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    return rows
+
+
+def start_job(job_name: str):
+    init_db()
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO job_runs (job_name, status, output)
+        VALUES (%s, %s, %s)
+        RETURNING id
+    """, (job_name, "RUNNING", ""))
+
+    row = cur.fetchone()
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return row["id"] if row else None
+
+
+def finish_job(job_id: int, status: str, output: str):
+    init_db()
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE job_runs
+        SET
+            status = %s,
+            output = %s,
+            finished_at = CURRENT_TIMESTAMP
+        WHERE id = %s
+    """, (status, output, job_id))
 
     conn.commit()
     cur.close()
