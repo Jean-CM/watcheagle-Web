@@ -3,28 +3,20 @@ import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import subprocess
-import requests
 
 app = Flask(__name__)
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 
-# =========================
-# CONEXIÓN DB
-# =========================
 def get_conn():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 
-# =========================
-# INIT DB
-# =========================
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
-    # TEAMS
     cur.execute("""
     CREATE TABLE IF NOT EXISTS teams (
         id SERIAL PRIMARY KEY,
@@ -41,7 +33,6 @@ def init_db():
     );
     """)
 
-    # SCROBBLES
     cur.execute("""
     CREATE TABLE IF NOT EXISTS scrobbles (
         id SERIAL PRIMARY KEY,
@@ -62,7 +53,6 @@ def init_db():
     ON scrobbles(team_id, track_name, artist_name, scrobble_time);
     """)
 
-    # JOB RUNS (FIX ERROR finished_at)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS job_runs (
         id SERIAL PRIMARY KEY,
@@ -83,192 +73,236 @@ def init_db():
     conn.close()
 
 
-# =========================
-# DASHBOARD
-# =========================
 @app.route("/")
 def home():
-    init_db()
+    try:
+        init_db()
 
-    conn = get_conn()
-    cur = conn.cursor()
+        conn = get_conn()
+        cur = conn.cursor()
 
-    cur.execute("""
-        SELECT id,name,app_name,lastfm_user,status,idle_minutes,last_scrobble_at,last_check_at
-        FROM teams
-        WHERE active = TRUE
-        ORDER BY id ASC
-    """)
+        cur.execute("""
+            SELECT
+                id,
+                name,
+                app_name,
+                lastfm_user,
+                status,
+                idle_minutes,
+                last_scrobble_at,
+                last_check_at
+            FROM teams
+            WHERE active = TRUE
+            ORDER BY id ASC
+        """)
 
-    teams = cur.fetchall()
+        teams = cur.fetchall()
+        cur.close()
+        conn.close()
 
-    cur.close()
-    conn.close()
+        rows = ""
 
-    rows = ""
+        for t in teams:
+            estado = t.get("status") or "PENDING"
+            color = "white"
 
-    for t in teams:
-        estado = t["status"] or "PENDING"
+            if estado == "OK":
+                color = "#22c55e"
+            elif estado == "WARN":
+                color = "#f59e0b"
+            elif estado == "INCIDENT":
+                color = "#ef4444"
 
-        color = ""
-        if estado == "OK":
-            color = "green"
-        elif estado == "WARN":
-            color = "orange"
-        elif estado == "INCIDENT":
-            color = "red"
+            rows += f"""
+            <tr>
+                <td>{t.get('id', '-')}</td>
+                <td>{t.get('name', '-')}</td>
+                <td>{t.get('app_name', '-')}</td>
+                <td>{t.get('lastfm_user', '-')}</td>
+                <td style="color:{color};font-weight:bold">{estado}</td>
+                <td>{t.get('last_scrobble_at') or '-'}</td>
+                <td>{t.get('idle_minutes', 0)}</td>
+                <td>{t.get('last_check_at') or '-'}</td>
+            </tr>
+            """
 
-        rows += f"""
-        <tr>
-            <td>{t['id']}</td>
-            <td>{t['name']}</td>
-            <td>{t['app_name']}</td>
-            <td>{t['lastfm_user']}</td>
-            <td style="color:{color}">{estado}</td>
-            <td>{t['last_scrobble_at'] or '-'}</td>
-            <td>{t['idle_minutes']}</td>
-            <td>{t['last_check_at'] or '-'}</td>
-        </tr>
+        return f"""
+        <html>
+        <body style="background:#071226;color:white;font-family:Arial;padding:20px">
+            <h2>WatchEagle</h2>
+            <p>Monitores: {len(teams)}</p>
+
+            <p>
+                <a href="/ping">ping</a> |
+                <a href="/healthz">healthz</a> |
+                <a href="/run-check">run-check</a> |
+                <a href="/collect-now">collect</a> |
+                <a href="/scrobbles-count">count</a> |
+                <a href="/fix-job-runs">fix jobs</a>
+            </p>
+
+            <table border="1" width="100%" cellpadding="8" cellspacing="0">
+                <tr>
+                    <th>ID</th>
+                    <th>Equipo</th>
+                    <th>App</th>
+                    <th>User</th>
+                    <th>Status</th>
+                    <th>Last scrobble</th>
+                    <th>Idle</th>
+                    <th>Last check</th>
+                </tr>
+                {rows}
+            </table>
+        </body>
+        </html>
         """
 
-    return f"""
-    <html>
-    <body style="background:#071226;color:white;font-family:Arial;padding:20px">
-
-    <h2>WatchEagle</h2>
-
-    <p>Monitores: {len(teams)}</p>
-
-    <p>
-    <a href="/run-check">run-check</a> |
-    <a href="/collect-now">collect</a> |
-    <a href="/scrobbles-count">count</a> |
-    <a href="/fix-job-runs">fix jobs</a>
-    </p>
-
-    <table border="1" width="100%" cellpadding="8">
-    <tr>
-    <th>ID</th><th>Equipo</th><th>App</th><th>User</th>
-    <th>Status</th><th>Last</th><th>Idle</th><th>Check</th>
-    </tr>
-    {rows}
-    </table>
-
-    </body>
-    </html>
-    """
+    except Exception as e:
+        return f"<pre>ERROR EN HOME:\\n{str(e)}</pre>", 500
 
 
-# =========================
-# FIX JOB_RUNS
-# =========================
-@app.route("/fix-job-runs")
-def fix_job_runs():
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-    ALTER TABLE job_runs
-    ADD COLUMN IF NOT EXISTS finished_at TIMESTAMP NULL;
-    """)
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    return {"ok": True}
-
-
-# =========================
-# TEST
-# =========================
 @app.route("/ping")
 def ping():
-    return {"ok": True}
+    return jsonify({"ok": True, "msg": "pong"})
 
 
-# =========================
-# HEALTH
-# =========================
 @app.route("/health")
 def health():
-    return {"ok": True}
+    return jsonify({"ok": True})
 
 
-# =========================
-# TEAMS
-# =========================
+@app.route("/healthz")
+def healthz():
+    try:
+        init_db()
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) AS total FROM teams")
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        return jsonify({
+            "ok": True,
+            "database": "connected",
+            "teams": row["total"]
+        })
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route("/fix-job-runs")
+def fix_job_runs():
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS job_runs (
+            id SERIAL PRIMARY KEY,
+            job_name TEXT,
+            status TEXT,
+            output TEXT,
+            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
+        cur.execute("""
+        ALTER TABLE job_runs
+        ADD COLUMN IF NOT EXISTS finished_at TIMESTAMP NULL;
+        """)
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({"ok": True, "message": "job_runs corregida"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/seed-team")
 def seed_team():
-    name = request.args.get("name")
-    app_name = request.args.get("app")
-    user = request.args.get("user")
+    try:
+        init_db()
 
-    conn = get_conn()
-    cur = conn.cursor()
+        name = request.args.get("name")
+        app_name = request.args.get("app")
+        user = request.args.get("user")
 
-    cur.execute("""
-    INSERT INTO teams(name,app_name,lastfm_user)
-    VALUES(%s,%s,%s)
-    ON CONFLICT DO NOTHING
-    RETURNING id
-    """, (name, app_name, user))
+        if not name or not app_name or not user:
+            return jsonify({
+                "ok": False,
+                "error": "Usa /seed-team?name=Equipo%2001&app=spotify&user=JeanCMP"
+            }), 400
 
-    row = cur.fetchone()
+        conn = get_conn()
+        cur = conn.cursor()
 
-    conn.commit()
-    cur.close()
-    conn.close()
+        cur.execute("""
+        INSERT INTO teams(name, app_name, lastfm_user)
+        VALUES(%s, %s, %s)
+        ON CONFLICT (lastfm_user) DO NOTHING
+        RETURNING id
+        """, (name, app_name, user))
 
-    return {"created": row}
+        row = cur.fetchone()
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({"ok": True, "created": row})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
-# =========================
-# MONITOR
-# =========================
 @app.route("/run-check")
 def run_check():
-    result = subprocess.run(
-        ["python", "watch_scrobbles.py"],
-        capture_output=True,
-        text=True
-    )
-    return f"<pre>{result.stdout}</pre>"
+    try:
+        result = subprocess.run(
+            ["python", "watch_scrobbles.py"],
+            capture_output=True,
+            text=True
+        )
+        return f"<pre>{result.stdout}\n{result.stderr}</pre>"
+    except Exception as e:
+        return f"<pre>{str(e)}</pre>", 500
 
 
-# =========================
-# COLLECTOR
-# =========================
 @app.route("/collect-now")
 def collect_now():
-    result = subprocess.run(
-        ["python", "collect_scrobbles.py"],
-        capture_output=True,
-        text=True
-    )
-    return f"<pre>{result.stdout}</pre>"
+    try:
+        result = subprocess.run(
+            ["python", "collect_scrobbles.py"],
+            capture_output=True,
+            text=True
+        )
+        return f"<pre>{result.stdout}\n{result.stderr}</pre>"
+    except Exception as e:
+        return f"<pre>{str(e)}</pre>", 500
 
 
-# =========================
-# COUNT
-# =========================
 @app.route("/scrobbles-count")
 def scrobbles_count():
-    conn = get_conn()
-    cur = conn.cursor()
+    try:
+        init_db()
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) AS total FROM scrobbles")
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
 
-    cur.execute("SELECT COUNT(*) total FROM scrobbles")
-    row = cur.fetchone()
-
-    cur.close()
-    conn.close()
-
-    return row
+        return jsonify({"ok": True, "total": row["total"]})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
-# =========================
-# MAIN
-# =========================
 if __name__ == "__main__":
     init_db()
     port = int(os.environ.get("PORT", 10000))
