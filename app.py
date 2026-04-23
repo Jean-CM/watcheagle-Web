@@ -1292,11 +1292,23 @@ def collect_all():
         result = subprocess.run(
             ["python", "backfill_scrobbles.py"],
             capture_output=True,
-            text=True
+            text=True,
+            timeout=1800
         )
-        return f"<pre>{result.stdout}\\n{result.stderr}</pre>"
+
+        return f"""
+        <pre>
+RETURN CODE: {result.returncode}
+
+STDOUT:
+{result.stdout}
+
+STDERR:
+{result.stderr}
+        </pre>
+        """
     except Exception as e:
-        return f"<pre>{str(e)}</pre>", 500
+        return f"<pre>ERROR EN COLLECT-ALL:\\n{str(e)}</pre>", 500
 
 
 @app.route("/scrobbles-count")
