@@ -31,10 +31,17 @@ def main():
             stop_user = False
 
             for page in range(1, COLLECTOR_MAX_PAGES + 1):
-                data = fetch_recent_tracks(team["lastfm_user"], limit=COLLECTOR_LIMIT, page=page)
+                data = fetch_recent_tracks(
+                    team["lastfm_user"],
+                    limit=COLLECTOR_LIMIT,
+                    page=page,
+                )
 
                 if "error" in data:
-                    lines.append(f"[ERROR] Collector {team['name']} | {team['lastfm_user']} | Last.fm API error {data.get('error')}: {data.get('message')}")
+                    lines.append(
+                        f"[ERROR] Collector {team['name']} | {team['lastfm_user']} | "
+                        f"Last.fm API error {data.get('error')}: {data.get('message')}"
+                    )
                     errors += 1
                     stop_user = True
                     break
@@ -44,8 +51,9 @@ def main():
                     break
 
                 for item in tracks:
-                    if item["now_playing"]:
+                    if item.get("now_playing"):
                         continue
+
                     if not item.get("scrobbled_at"):
                         continue
 
@@ -60,10 +68,15 @@ def main():
                 if stop_user:
                     break
 
-            lines.append(f"[OK] Collector {team['name']} | {team['lastfm_user']} | {team.get('country_code') or '-'} | insertados={inserted_for_team}")
+            lines.append(
+                f"[OK] Collector {team['name']} | {team['lastfm_user']} | insertados={inserted_for_team}"
+            )
+
         except Exception as e:
             errors += 1
-            lines.append(f"[ERROR] Collector {team['name']} | {team['lastfm_user']} | {str(e)}")
+            lines.append(
+                f"[ERROR] Collector {team['name']} | {team['lastfm_user']} | {str(e)}"
+            )
 
     lines.append("")
     lines.append(f"Total scrobbles insertados: {total_inserted}")
