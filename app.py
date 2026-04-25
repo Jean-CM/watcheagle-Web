@@ -3,18 +3,23 @@ import os
 import sys
 import subprocess
 import json
+import threading
+from datetime import datetime
 from helpers import get_conn, init_db
 
 app = Flask(__name__)
 
 PLATFORM_RATES = {
-    "spotify": {"min": 0.0035, "max": 0.0050},
+    "spotify": {"min": 0.0030, "max": 0.0050},
     "apple": {"min": 0.0070, "max": 0.0100},
     "apple music": {"min": 0.0070, "max": 0.0100},
     "tidal": {"min": 0.0120, "max": 0.0150},
     "youtube": {"min": 0.0007, "max": 0.0020},
     "youtube music": {"min": 0.0007, "max": 0.0020},
 }
+
+JOB_LOG_DIR = "/tmp/watcheagle_jobs"
+os.makedirs(JOB_LOG_DIR, exist_ok=True)
 
 
 def safe_int(v, d=0):
@@ -49,7 +54,9 @@ def month_where(alias="s"):
         clauses.append(f"TO_CHAR({alias}.scrobble_time, 'YYYY-MM') = %s")
         params.append(month)
     else:
-        clauses.append(f"DATE_TRUNC('month', {alias}.scrobble_time) = DATE_TRUNC('month', CURRENT_DATE)")
+        clauses.append(
+            f"DATE_TRUNC('month', {alias}.scrobble_time) = DATE_TRUNC('month', CURRENT_DATE)"
+        )
 
     if platform:
         clauses.append(f"LOWER({alias}.app_name) = %s")
@@ -96,7 +103,43 @@ def filter_form(view):
     """
 
 
-def run_python_script(script_name, timeout=1800):
+def start_logged_job(script_name, job_name):
+    log_path = os.path.join(JOB_LOG_DIR, f"{job_name}.log")
+
+    def task():
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write(f"JOB: {job_name}\n")
+            f.write(f"SCRIPT: {script_name}\n")
+            f.write(f"PATH: {os.path.join(os.getcwd(), script_name)}\n")
+            f.write(f"PYTHON: {sys.executable}\n")
+            f.write(f"STARTED UTC: {datetime.utcnow()}\n")
+            f.write("\n==================== OUTPUT ====================\n\n")
+            f.flush()
+
+            try:
+                result = subprocess.run(
+                    [sys.executable, os.path.join(os.getcwd(), script_name)],
+                    stdout=f,
+                    stderr=f,
+                    text=True,
+                )
+
+                f.write("\n==================== FINISHED ====================\n")
+                f.write(f"FINISHED UTC: {datetime.utcnow()}\n")
+                f.write(f"RETURN CODE: {result.returncode}\n")
+                f.flush()
+
+            except Exception as e:
+                f.write("\n==================== ERROR ====================\n")
+                f.write(str(e))
+                f.write("\n")
+                f.flush()
+
+    threading.Thread(target=task, daemon=True).start()
+    return log_path
+
+
+def run_python_script(script_name, timeout=900):
     try:
         script_path = os.path.join(os.getcwd(), script_name)
 
@@ -125,7 +168,7 @@ STDERR:
 </pre>
 """
     except subprocess.TimeoutExpired:
-        return f"<pre>ERROR: {script_name} tardó demasiado. Baja BACKFILL_MAX_PAGES o ejecútalo por bloques.</pre>", 500
+        return f"<pre>ERROR: {script_name} tardó demasiado.</pre>", 500
     except Exception as e:
         return f"<pre>ERROR ejecutando {script_name}:\n{str(e)}</pre>", 500
 
@@ -137,7 +180,12 @@ def nav_link(label, view, current):
 
 def badge(status):
     s = (status or "PENDING").upper()
-    cls = {"OK": "ok", "WARN": "warn", "INCIDENT": "incident", "PENDING": "pending"}.get(s, "pending")
+    cls = {
+        "OK": "ok",
+        "WARN": "warn",
+        "INCIDENT": "incident",
+        "PENDING": "pending",
+    }.get(s, "pending")
     return f'<span class="badge {cls}">{s}</span>'
 
 
@@ -301,7 +349,9 @@ pre {{
     <div class="tools">
         <a class="tool-link" href="/run-check">run-check</a>
         <a class="tool-link" href="/collect-now">collect-now</a>
-        <a class="tool-link" href="/collect-all">collect-all visible</a>
+        <a class="tool-link" href="/collect-all">collect-all</a>
+        <a class="tool-link" href="/job-log?job=collect-now">log collect-now</a>
+        <a class="tool-link" href="/job-log?job=collect-all">log collect-all</a>
         <a class="tool-link" href="/scrobbles-count">scrobbles-count</a>
         <a class="tool-link" href="/healthz">healthz</a>
     </div>
@@ -314,7 +364,7 @@ pre {{
 
 def render_monitor(cur):
     where, params = month_where("s")
-    month, platform = current_filters()
+    _, platform = current_filters()
 
     cur.execute("""
         SELECT
@@ -425,7 +475,10 @@ def render_analisis(cur):
     _, platform = current_filters()
 
     if platform:
-        cur.execute("SELECT COUNT(*) c FROM scrobbles s WHERE DATE(s.scrobble_time)=CURRENT_DATE AND LOWER(s.app_name)=%s", (platform,))
+        cur.execute(
+            "SELECT COUNT(*) c FROM scrobbles s WHERE DATE(s.scrobble_time)=CURRENT_DATE AND LOWER(s.app_name)=%s",
+            (platform,),
+        )
     else:
         cur.execute("SELECT COUNT(*) c FROM scrobbles s WHERE DATE(s.scrobble_time)=CURRENT_DATE")
     plays_today = safe_int(cur.fetchone()["c"])
@@ -813,12 +866,68 @@ def run_check():
 
 @app.route("/collect-now")
 def collect_now():
-    return run_python_script("collect_scrobbles.py", timeout=900)
+    start_logged_job("collect_scrobbles.py", "collect-now")
+    return redirect("/job-log?job=collect-now")
 
 
 @app.route("/collect-all")
 def collect_all():
-    return run_python_script("backfill_scrobbles.py", timeout=1800)
+    start_logged_job("backfill_scrobbles.py", "collect-all")
+    return redirect("/job-log?job=collect-all")
+
+
+@app.route("/collect_now")
+def collect_now_alias():
+    return collect_now()
+
+
+@app.route("/collect_all")
+def collect_all_alias():
+    return collect_all()
+
+
+@app.route("/job-log")
+def job_log():
+    job = request.args.get("job", "collect-now")
+    log_path = os.path.join(JOB_LOG_DIR, f"{job}.log")
+
+    if not os.path.exists(log_path):
+        content = "Job iniciado. Esperando logs..."
+    else:
+        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+
+    return f"""
+    <html>
+    <head>
+        <meta http-equiv="refresh" content="5">
+        <title>WatchEagle Job Log</title>
+        <style>
+            body {{
+                background:#061126;
+                color:white;
+                font-family:Arial;
+                padding:24px;
+            }}
+            pre {{
+                background:#020617;
+                color:#d1d5db;
+                border:1px solid #334155;
+                border-radius:14px;
+                padding:18px;
+                white-space:pre-wrap;
+            }}
+            a {{ color:#93c5fd; }}
+        </style>
+    </head>
+    <body>
+        <h1>WatchEagle Job Log</h1>
+        <p><a href="/">Volver al dashboard</a></p>
+        <p>Se actualiza cada 5 segundos.</p>
+        <pre>{content}</pre>
+    </body>
+    </html>
+    """
 
 
 @app.route("/healthz")
