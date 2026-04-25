@@ -2,14 +2,13 @@ from flask import Flask, request, jsonify, redirect
 import os
 import sys
 import subprocess
-import threading
 import json
 from helpers import get_conn, init_db
 
 app = Flask(__name__)
 
 PLATFORM_RATES = {
-    "spotify": {"min": 0.0030, "max": 0.0050},
+    "spotify": {"min": 0.0035, "max": 0.0050},
     "apple": {"min": 0.0070, "max": 0.0100},
     "apple music": {"min": 0.0070, "max": 0.0100},
     "tidal": {"min": 0.0120, "max": 0.0150},
@@ -36,9 +35,9 @@ def avg_rate(platform):
 
 
 def current_filters():
-    month = request.args.get("month") or ""
-    platform = request.args.get("platform") or ""
-    return month.strip(), platform.strip().lower()
+    month = (request.args.get("month") or "").strip()
+    platform = (request.args.get("platform") or "").strip().lower()
+    return month, platform
 
 
 def month_where(alias="s"):
@@ -71,15 +70,6 @@ def filter_query(view):
 
 def filter_form(view):
     month, platform = current_filters()
-
-    selected = {
-        "spotify": "selected" if platform == "spotify" else "",
-        "apple": "selected" if platform == "apple" else "",
-        "tidal": "selected" if platform == "tidal" else "",
-        "youtube": "selected" if platform == "youtube" else "",
-        "": "selected" if not platform else "",
-    }
-
     return f"""
     <div class="card" style="margin-bottom:18px;">
         <div class="section-title">Filtros</div>
@@ -92,11 +82,11 @@ def filter_form(view):
             <div class="field">
                 <label>Plataforma</label>
                 <select name="platform">
-                    <option value="" {selected[""]}>Todas</option>
-                    <option value="spotify" {selected["spotify"]}>Spotify</option>
-                    <option value="apple" {selected["apple"]}>Apple Music</option>
-                    <option value="tidal" {selected["tidal"]}>Tidal</option>
-                    <option value="youtube" {selected["youtube"]}>YouTube Music</option>
+                    <option value="" {"selected" if not platform else ""}>Todas</option>
+                    <option value="spotify" {"selected" if platform == "spotify" else ""}>Spotify</option>
+                    <option value="apple" {"selected" if platform == "apple" else ""}>Apple Music</option>
+                    <option value="tidal" {"selected" if platform == "tidal" else ""}>Tidal</option>
+                    <option value="youtube" {"selected" if platform == "youtube" else ""}>YouTube Music</option>
                 </select>
             </div>
             <div></div>
@@ -106,18 +96,25 @@ def filter_form(view):
     """
 
 
-def run_python_script(script_name, timeout=900):
+def run_python_script(script_name, timeout=1800):
     try:
-        path = os.path.join(os.getcwd(), script_name)
+        script_path = os.path.join(os.getcwd(), script_name)
+
+        if not os.path.exists(script_path):
+            return f"<pre>ERROR: No existe {script_path}</pre>", 500
+
         result = subprocess.run(
-            [sys.executable, path],
+            [sys.executable, script_path],
             capture_output=True,
             text=True,
             timeout=timeout,
         )
+
         return f"""
-        <pre>
+<pre>
 SCRIPT: {script_name}
+PATH: {script_path}
+PYTHON: {sys.executable}
 RETURN CODE: {result.returncode}
 
 STDOUT:
@@ -125,17 +122,12 @@ STDOUT:
 
 STDERR:
 {result.stderr}
-        </pre>
-        """
+</pre>
+"""
+    except subprocess.TimeoutExpired:
+        return f"<pre>ERROR: {script_name} tardó demasiado. Baja BACKFILL_MAX_PAGES o ejecútalo por bloques.</pre>", 500
     except Exception as e:
-        return f"<pre>ERROR ejecutando {script_name}: {str(e)}</pre>", 500
-
-
-def run_background(script_name):
-    def task():
-        subprocess.run([sys.executable, os.path.join(os.getcwd(), script_name)])
-
-    threading.Thread(target=task, daemon=True).start()
+        return f"<pre>ERROR ejecutando {script_name}:\n{str(e)}</pre>", 500
 
 
 def nav_link(label, view, current):
@@ -288,6 +280,14 @@ textarea {{ min-height:95px; }}
 }}
 .mini-row:last-child {{ border-bottom:0; }}
 canvas {{ width:100% !important; max-height:330px; }}
+pre {{
+    background:#020617;
+    color:#d1d5db;
+    border:1px solid rgba(96,165,250,.24);
+    border-radius:16px;
+    padding:18px;
+    white-space:pre-wrap;
+}}
 @media(max-width:1100px) {{
     .grid,.grid-3,.grid-2,.form-grid {{ grid-template-columns:1fr; }}
 }}
@@ -301,7 +301,7 @@ canvas {{ width:100% !important; max-height:330px; }}
     <div class="tools">
         <a class="tool-link" href="/run-check">run-check</a>
         <a class="tool-link" href="/collect-now">collect-now</a>
-        <a class="tool-link" href="/collect-all">collect-all background</a>
+        <a class="tool-link" href="/collect-all">collect-all visible</a>
         <a class="tool-link" href="/scrobbles-count">scrobbles-count</a>
         <a class="tool-link" href="/healthz">healthz</a>
     </div>
@@ -313,8 +313,8 @@ canvas {{ width:100% !important; max-height:330px; }}
 
 
 def render_monitor(cur):
-    month, platform = current_filters()
     where, params = month_where("s")
+    month, platform = current_filters()
 
     cur.execute("""
         SELECT
@@ -327,12 +327,8 @@ def render_monitor(cur):
     """)
     s = cur.fetchone()
 
-    cur.execute(f"""
-        SELECT COUNT(*) total_today
-        FROM scrobbles s
-        WHERE {where}
-    """, params)
-    total_filtered = safe_int(cur.fetchone()["total_today"])
+    cur.execute(f"SELECT COUNT(*) total_filtered FROM scrobbles s WHERE {where}", params)
+    total_filtered = safe_int(cur.fetchone()["total_filtered"])
 
     if platform:
         cur.execute("""
@@ -426,8 +422,12 @@ def render_monitor(cur):
 
 def render_analisis(cur):
     where, params = month_where("s")
+    _, platform = current_filters()
 
-    cur.execute(f"SELECT COUNT(*) c FROM scrobbles s WHERE DATE(s.scrobble_time)=CURRENT_DATE" + (f" AND LOWER(s.app_name)=%s" if current_filters()[1] else ""), ([current_filters()[1]] if current_filters()[1] else []))
+    if platform:
+        cur.execute("SELECT COUNT(*) c FROM scrobbles s WHERE DATE(s.scrobble_time)=CURRENT_DATE AND LOWER(s.app_name)=%s", (platform,))
+    else:
+        cur.execute("SELECT COUNT(*) c FROM scrobbles s WHERE DATE(s.scrobble_time)=CURRENT_DATE")
     plays_today = safe_int(cur.fetchone()["c"])
 
     cur.execute(f"SELECT COUNT(*) c FROM scrobbles s WHERE {where}", params)
@@ -808,24 +808,17 @@ def delete_team():
 
 @app.route("/run-check")
 def run_check():
-    return run_python_script("watch_scrobbles.py")
+    return run_python_script("watch_scrobbles.py", timeout=900)
 
 
 @app.route("/collect-now")
 def collect_now():
-    return run_python_script("collect_scrobbles.py")
+    return run_python_script("collect_scrobbles.py", timeout=900)
 
 
 @app.route("/collect-all")
 def collect_all():
-    run_background("backfill_scrobbles.py")
-    return """
-    <body style="background:#061126;color:white;font-family:Arial;padding:24px;">
-    <h2>Backfill iniciado en background 🚀</h2>
-    <p>Vuelve al dashboard y revisa las métricas en unos minutos.</p>
-    <a style="color:#93c5fd;" href="/">Volver</a>
-    </body>
-    """
+    return run_python_script("backfill_scrobbles.py", timeout=1800)
 
 
 @app.route("/healthz")
