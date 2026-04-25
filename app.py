@@ -35,6 +35,77 @@ def avg_rate(platform):
     return (r["min"] + r["max"]) / 2
 
 
+def current_filters():
+    month = request.args.get("month") or ""
+    platform = request.args.get("platform") or ""
+    return month.strip(), platform.strip().lower()
+
+
+def month_where(alias="s"):
+    month, platform = current_filters()
+    clauses = []
+    params = []
+
+    if month:
+        clauses.append(f"TO_CHAR({alias}.scrobble_time, 'YYYY-MM') = %s")
+        params.append(month)
+    else:
+        clauses.append(f"DATE_TRUNC('month', {alias}.scrobble_time) = DATE_TRUNC('month', CURRENT_DATE)")
+
+    if platform:
+        clauses.append(f"LOWER({alias}.app_name) = %s")
+        params.append(platform)
+
+    return " AND ".join(clauses), params
+
+
+def filter_query(view):
+    month, platform = current_filters()
+    q = f"?view={view}"
+    if month:
+        q += f"&month={month}"
+    if platform:
+        q += f"&platform={platform}"
+    return q
+
+
+def filter_form(view):
+    month, platform = current_filters()
+
+    selected = {
+        "spotify": "selected" if platform == "spotify" else "",
+        "apple": "selected" if platform == "apple" else "",
+        "tidal": "selected" if platform == "tidal" else "",
+        "youtube": "selected" if platform == "youtube" else "",
+        "": "selected" if not platform else "",
+    }
+
+    return f"""
+    <div class="card" style="margin-bottom:18px;">
+        <div class="section-title">Filtros</div>
+        <form class="form-grid" method="GET" action="/">
+            <input type="hidden" name="view" value="{view}">
+            <div class="field">
+                <label>Mes</label>
+                <input type="month" name="month" value="{month}">
+            </div>
+            <div class="field">
+                <label>Plataforma</label>
+                <select name="platform">
+                    <option value="" {selected[""]}>Todas</option>
+                    <option value="spotify" {selected["spotify"]}>Spotify</option>
+                    <option value="apple" {selected["apple"]}>Apple Music</option>
+                    <option value="tidal" {selected["tidal"]}>Tidal</option>
+                    <option value="youtube" {selected["youtube"]}>YouTube Music</option>
+                </select>
+            </div>
+            <div></div>
+            <button class="btn btn-primary">Aplicar</button>
+        </form>
+    </div>
+    """
+
+
 def run_python_script(script_name, timeout=900):
     try:
         path = os.path.join(os.getcwd(), script_name)
@@ -69,17 +140,12 @@ def run_background(script_name):
 
 def nav_link(label, view, current):
     active = "active" if view == current else ""
-    return f'<a class="nav-link {active}" href="/?view={view}">{label}</a>'
+    return f'<a class="nav-link {active}" href="/{filter_query(view)}">{label}</a>'
 
 
 def badge(status):
     s = (status or "PENDING").upper()
-    cls = {
-        "OK": "ok",
-        "WARN": "warn",
-        "INCIDENT": "incident",
-        "PENDING": "pending",
-    }.get(s, "pending")
+    cls = {"OK": "ok", "WARN": "warn", "INCIDENT": "incident", "PENDING": "pending"}.get(s, "pending")
     return f'<span class="badge {cls}">{s}</span>'
 
 
@@ -247,6 +313,9 @@ canvas {{ width:100% !important; max-height:330px; }}
 
 
 def render_monitor(cur):
+    month, platform = current_filters()
+    where, params = month_where("s")
+
     cur.execute("""
         SELECT
             COUNT(*) total,
@@ -258,30 +327,34 @@ def render_monitor(cur):
     """)
     s = cur.fetchone()
 
-    cur.execute("""
+    cur.execute(f"""
         SELECT COUNT(*) total_today
-        FROM scrobbles
-        WHERE DATE(scrobble_time)=CURRENT_DATE
-    """)
-    today = safe_int(cur.fetchone()["total_today"])
+        FROM scrobbles s
+        WHERE {where}
+    """, params)
+    total_filtered = safe_int(cur.fetchone()["total_today"])
 
-    cur.execute("""
-        SELECT id,name,app_name,lastfm_user,status,last_scrobble_at,idle_minutes,last_check_at
-        FROM teams
-        ORDER BY id ASC
-    """)
+    if platform:
+        cur.execute("""
+            SELECT id,name,app_name,lastfm_user,status,last_scrobble_at,idle_minutes,last_check_at
+            FROM teams
+            WHERE LOWER(app_name) = %s
+            ORDER BY id ASC
+        """, (platform,))
+    else:
+        cur.execute("""
+            SELECT id,name,app_name,lastfm_user,status,last_scrobble_at,idle_minutes,last_check_at
+            FROM teams
+            ORDER BY id ASC
+        """)
     teams = cur.fetchall()
 
     rows = ""
     for t in teams:
         rows += f"""
         <tr>
-            <td>{t['id']}</td>
-            <td>{t['name']}</td>
-            <td>{t['app_name']}</td>
-            <td>{t['lastfm_user']}</td>
-            <td>{badge(t['status'])}</td>
-            <td>{t['last_scrobble_at'] or '-'}</td>
+            <td>{t['id']}</td><td>{t['name']}</td><td>{t['app_name']}</td><td>{t['lastfm_user']}</td>
+            <td>{badge(t['status'])}</td><td>{t['last_scrobble_at'] or '-'}</td>
             <td>{t['idle_minutes'] if t['idle_minutes'] is not None else '-'}</td>
             <td>{t['last_check_at'] or '-'}</td>
             <td>
@@ -297,16 +370,16 @@ def render_monitor(cur):
         rows = '<tr><td colspan="9" class="muted" style="text-align:center;">No hay equipos.</td></tr>'
 
     return f"""
+    {filter_form("monitor")}
+
     <div class="card" style="margin-bottom:18px;">
         <div class="section-title">Agregar usuario Last.fm</div>
         <form class="form-grid" method="GET" action="/seed-team">
             <div class="field"><label>Equipo</label><input name="name" placeholder="Box-01 01" required></div>
             <div class="field"><label>App</label>
                 <select name="app">
-                    <option value="spotify">spotify</option>
-                    <option value="apple">apple</option>
-                    <option value="tidal">tidal</option>
-                    <option value="youtube">youtube</option>
+                    <option value="spotify">spotify</option><option value="apple">apple</option>
+                    <option value="tidal">tidal</option><option value="youtube">youtube</option>
                 </select>
             </div>
             <div class="field"><label>Usuario Last.fm</label><input name="user" placeholder="equipoC01" required></div>
@@ -321,14 +394,12 @@ def render_monitor(cur):
                 <div class="field"><label>Prefijo</label><input name="prefix" placeholder="Box-03" required></div>
                 <div class="field"><label>App</label>
                     <select name="app">
-                        <option value="spotify">spotify</option>
-                        <option value="apple">apple</option>
-                        <option value="tidal">tidal</option>
-                        <option value="youtube">youtube</option>
+                        <option value="spotify">spotify</option><option value="apple">apple</option>
+                        <option value="tidal">tidal</option><option value="youtube">youtube</option>
                     </select>
                 </div>
             </div>
-            <div class="field" style="margin-top:12px;"><label>Usuarios separados por coma</label><textarea name="users" placeholder="equipoC41,equipoC42,equipoC43" required></textarea></div>
+            <div class="field" style="margin-top:12px;"><label>Usuarios separados por coma</label><textarea name="users" required></textarea></div>
             <br><button class="btn btn-primary">Cargar varios</button>
         </form>
     </div>
@@ -341,71 +412,69 @@ def render_monitor(cur):
     </div>
 
     <div class="card" style="margin-bottom:18px;">
-        <div class="label">Scrobbles hoy</div>
-        <div class="value blue">{today}</div>
+        <div class="label">Scrobbles filtrados</div>
+        <div class="value blue">{total_filtered}</div>
     </div>
 
     <div class="section-title">Estado de equipos</div>
     <table>
-        <thead>
-            <tr>
-                <th>ID</th><th>Equipo</th><th>App</th><th>User</th><th>Status</th>
-                <th>Último scrobble</th><th>Idle</th><th>Último check</th><th>Acciones</th>
-            </tr>
-        </thead>
+        <thead><tr><th>ID</th><th>Equipo</th><th>App</th><th>User</th><th>Status</th><th>Último scrobble</th><th>Idle</th><th>Último check</th><th>Acciones</th></tr></thead>
         <tbody>{rows}</tbody>
     </table>
     """
 
 
 def render_analisis(cur):
-    cur.execute("SELECT COUNT(*) c FROM scrobbles WHERE DATE(scrobble_time)=CURRENT_DATE")
+    where, params = month_where("s")
+
+    cur.execute(f"SELECT COUNT(*) c FROM scrobbles s WHERE DATE(s.scrobble_time)=CURRENT_DATE" + (f" AND LOWER(s.app_name)=%s" if current_filters()[1] else ""), ([current_filters()[1]] if current_filters()[1] else []))
     plays_today = safe_int(cur.fetchone()["c"])
 
-    cur.execute("SELECT COUNT(*) c FROM scrobbles WHERE DATE_TRUNC('month',scrobble_time)=DATE_TRUNC('month',CURRENT_DATE)")
+    cur.execute(f"SELECT COUNT(*) c FROM scrobbles s WHERE {where}", params)
     plays_month = safe_int(cur.fetchone()["c"])
 
-    cur.execute("""
-        SELECT DATE(scrobble_time) day, COUNT(*) plays
-        FROM scrobbles
-        WHERE scrobble_time >= CURRENT_DATE - INTERVAL '14 days'
-        GROUP BY DATE(scrobble_time)
-        ORDER BY day ASC
-    """)
+    cur.execute(f"""
+        SELECT DATE(s.scrobble_time) AS play_day, COUNT(*) AS plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY DATE(s.scrobble_time)
+        ORDER BY play_day ASC
+    """, params)
     daily = cur.fetchall()
-    labels = [str(r["day"])[5:] for r in daily]
+
+    labels = [str(r["play_day"])[5:] for r in daily]
     values = [safe_int(r["plays"]) for r in daily]
 
-    cur.execute("""
-        SELECT lastfm_user, COUNT(*) plays
-        FROM scrobbles
-        WHERE DATE_TRUNC('month',scrobble_time)=DATE_TRUNC('month',CURRENT_DATE)
-        GROUP BY lastfm_user
+    cur.execute(f"""
+        SELECT s.lastfm_user, COUNT(*) AS plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY s.lastfm_user
         ORDER BY plays DESC
         LIMIT 25
-    """)
+    """, params)
     users = cur.fetchall()
-
     user_rows = "".join([f"<tr><td>{r['lastfm_user']}</td><td>{r['plays']}</td></tr>" for r in users]) or '<tr><td colspan="2" class="muted">Sin datos</td></tr>'
 
-    cur.execute("""
-        SELECT artist_name, COUNT(*) plays
-        FROM scrobbles
-        WHERE DATE_TRUNC('month',scrobble_time)=DATE_TRUNC('month',CURRENT_DATE)
-        GROUP BY artist_name
+    cur.execute(f"""
+        SELECT s.artist_name, COUNT(*) AS plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY s.artist_name
         ORDER BY plays DESC
         LIMIT 10
-    """)
+    """, params)
     artists = cur.fetchall()
-
     artist_html = "".join([f"<div class='mini-row'><span>{r['artist_name']}</span><strong>{r['plays']}</strong></div>" for r in artists]) or '<div class="muted">Sin datos</div>'
 
     avg_daily = round(plays_month / max(len(daily), 1), 2)
 
     return f"""
+    {filter_form("analisis")}
+
     <div class="grid">
         <div class="card"><div class="label">Plays hoy</div><div class="value">{plays_today}</div></div>
-        <div class="card"><div class="label">Plays mes</div><div class="value">{plays_month}</div></div>
+        <div class="card"><div class="label">Plays filtrados</div><div class="value">{plays_month}</div></div>
         <div class="card"><div class="label">Promedio diario</div><div class="value">{avg_daily}</div></div>
         <div class="card"><div class="label">Usuarios activos</div><div class="value">{len(users)}</div></div>
     </div>
@@ -416,10 +485,7 @@ def render_analisis(cur):
     </div>
 
     <div class="grid-2">
-        <div class="card">
-            <div class="section-title">Top artistas del mes</div>
-            {artist_html}
-        </div>
+        <div class="card"><div class="section-title">Top artistas</div>{artist_html}</div>
         <div>
             <div class="section-title">Reproducciones por usuario Last.fm</div>
             <table><thead><tr><th>Usuario</th><th>Reproducciones</th></tr></thead><tbody>{user_rows}</tbody></table>
@@ -429,43 +495,33 @@ def render_analisis(cur):
     <script>
     new Chart(document.getElementById('playsChart'), {{
         type:'line',
-        data:{{
-            labels:{json.dumps(labels)},
-            datasets:[{{
-                label:'Reproducciones',
-                data:{json.dumps(values)},
-                borderColor:'#60a5fa',
-                backgroundColor:'rgba(96,165,250,.15)',
-                tension:.35,
-                fill:true
-            }}]
-        }},
-        options:{{ responsive:true, plugins:{{legend:{{labels:{{color:'#e5e7eb'}}}}}}, scales:{{x:{{ticks:{{color:'#94a3b8'}}}},y:{{ticks:{{color:'#94a3b8'}}}}}} }}
+        data:{{labels:{json.dumps(labels)},datasets:[{{label:'Reproducciones',data:{json.dumps(values)},borderColor:'#60a5fa',backgroundColor:'rgba(96,165,250,.15)',tension:.35,fill:true}}]}},
+        options:{{responsive:true,plugins:{{legend:{{labels:{{color:'#e5e7eb'}}}}}},scales:{{x:{{ticks:{{color:'#94a3b8'}}}},y:{{ticks:{{color:'#94a3b8'}}}}}}}}
     }});
     </script>
     """
 
 
 def render_ganancias(cur):
-    cur.execute("""
-        SELECT LOWER(app_name) platform, COUNT(*) plays
-        FROM scrobbles
-        WHERE DATE_TRUNC('month',scrobble_time)=DATE_TRUNC('month',CURRENT_DATE)
-        GROUP BY LOWER(app_name)
+    where, params = month_where("s")
+
+    cur.execute(f"""
+        SELECT LOWER(s.app_name) AS platform, COUNT(*) AS plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY LOWER(s.app_name)
         ORDER BY plays DESC
-    """)
+    """, params)
     platforms = cur.fetchall()
 
-    total_min = 0
-    total_max = 0
+    total_min = total_max = 0
     platform_rows = ""
 
     for r in platforms:
         p = (r["platform"] or "").lower()
         plays = safe_int(r["plays"])
         rate = PLATFORM_RATES.get(p, PLATFORM_RATES["spotify"])
-        mn = plays * rate["min"]
-        mx = plays * rate["max"]
+        mn, mx = plays * rate["min"], plays * rate["max"]
         total_min += mn
         total_max += mx
         platform_rows += f"<tr><td>{p.title()}</td><td>{plays}</td><td>{money(mn)}</td><td>{money(mx)}</td><td>{money((mn+mx)/2)}</td></tr>"
@@ -473,61 +529,57 @@ def render_ganancias(cur):
     if not platform_rows:
         platform_rows = '<tr><td colspan="5" class="muted">Sin datos</td></tr>'
 
-    cur.execute("""
-        SELECT DATE(scrobble_time) day, LOWER(app_name) platform, COUNT(*) plays
-        FROM scrobbles
-        WHERE scrobble_time >= CURRENT_DATE - INTERVAL '14 days'
-        GROUP BY DATE(scrobble_time), LOWER(app_name)
-        ORDER BY day ASC
-    """)
+    cur.execute(f"""
+        SELECT DATE(s.scrobble_time) AS play_day, LOWER(s.app_name) AS platform, COUNT(*) AS plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY DATE(s.scrobble_time), LOWER(s.app_name)
+        ORDER BY play_day ASC
+    """, params)
     daily = cur.fetchall()
 
     day_map = {}
     for r in daily:
-        d = str(r["day"])[5:]
+        d = str(r["play_day"])[5:]
         day_map[d] = day_map.get(d, 0) + safe_int(r["plays"]) * avg_rate(r["platform"])
 
     gain_labels = list(day_map.keys())
     gain_values = [round(v, 2) for v in day_map.values()]
 
-    cur.execute("""
-        SELECT artist_name, LOWER(app_name) platform, COUNT(*) plays
-        FROM scrobbles
-        WHERE DATE(scrobble_time)=CURRENT_DATE
-        GROUP BY artist_name, LOWER(app_name)
-    """)
+    cur.execute(f"""
+        SELECT s.artist_name, LOWER(s.app_name) AS platform, COUNT(*) AS plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY s.artist_name, LOWER(s.app_name)
+    """, params)
     raw_artists = cur.fetchall()
 
     artist_map = {}
     for r in raw_artists:
         artist_map[r["artist_name"]] = artist_map.get(r["artist_name"], 0) + safe_int(r["plays"]) * avg_rate(r["platform"])
 
-    artist_rows = "".join([
-        f"<tr><td>{a}</td><td>{money(v)}</td></tr>"
-        for a, v in sorted(artist_map.items(), key=lambda x: x[1], reverse=True)[:15]
-    ]) or '<tr><td colspan="2" class="muted">Sin datos</td></tr>'
+    artist_rows = "".join([f"<tr><td>{a}</td><td>{money(v)}</td></tr>" for a, v in sorted(artist_map.items(), key=lambda x: x[1], reverse=True)[:20]]) or '<tr><td colspan="2" class="muted">Sin datos</td></tr>'
 
-    cur.execute("""
-        SELECT lastfm_user, LOWER(app_name) platform, COUNT(*) plays
-        FROM scrobbles
-        WHERE DATE_TRUNC('month',scrobble_time)=DATE_TRUNC('month',CURRENT_DATE)
-        GROUP BY lastfm_user, LOWER(app_name)
-    """)
+    cur.execute(f"""
+        SELECT s.lastfm_user, LOWER(s.app_name) AS platform, COUNT(*) AS plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY s.lastfm_user, LOWER(s.app_name)
+    """, params)
     raw_users = cur.fetchall()
 
     user_map = {}
     for r in raw_users:
         user_map[r["lastfm_user"]] = user_map.get(r["lastfm_user"], 0) + safe_int(r["plays"]) * avg_rate(r["platform"])
 
-    user_rows = "".join([
-        f"<tr><td>{u}</td><td>{money(v)}</td></tr>"
-        for u, v in sorted(user_map.items(), key=lambda x: x[1], reverse=True)[:20]
-    ]) or '<tr><td colspan="2" class="muted">Sin datos</td></tr>'
+    user_rows = "".join([f"<tr><td>{u}</td><td>{money(v)}</td></tr>" for u, v in sorted(user_map.items(), key=lambda x: x[1], reverse=True)[:25]]) or '<tr><td colspan="2" class="muted">Sin datos</td></tr>'
 
     return f"""
+    {filter_form("ganancias")}
+
     <div class="grid-3">
-        <div class="card"><div class="label">Mínimo estimado mes</div><div class="value">{money(total_min)}</div></div>
-        <div class="card"><div class="label">Máximo estimado mes</div><div class="value">{money(total_max)}</div></div>
+        <div class="card"><div class="label">Mínimo estimado</div><div class="value">{money(total_min)}</div></div>
+        <div class="card"><div class="label">Máximo estimado</div><div class="value">{money(total_max)}</div></div>
         <div class="card"><div class="label">Promedio estimado</div><div class="value">{money((total_min+total_max)/2)}</div></div>
     </div>
 
@@ -550,46 +602,32 @@ def render_ganancias(cur):
     </div>
 
     <div class="grid-2">
-        <div>
-            <div class="section-title">Ganancias por artista hoy</div>
-            <table><thead><tr><th>Artista</th><th>Ganancia</th></tr></thead><tbody>{artist_rows}</tbody></table>
-        </div>
-        <div>
-            <div class="section-title">Ganancias por usuario Last.fm mes</div>
-            <table><thead><tr><th>Usuario</th><th>Ganancia</th></tr></thead><tbody>{user_rows}</tbody></table>
-        </div>
+        <div><div class="section-title">Ganancias por artista</div><table><thead><tr><th>Artista</th><th>Ganancia</th></tr></thead><tbody>{artist_rows}</tbody></table></div>
+        <div><div class="section-title">Ganancias por usuario Last.fm</div><table><thead><tr><th>Usuario</th><th>Ganancia</th></tr></thead><tbody>{user_rows}</tbody></table></div>
     </div>
 
     <script>
     new Chart(document.getElementById('gainChart'), {{
         type:'line',
-        data:{{
-            labels:{json.dumps(gain_labels)},
-            datasets:[{{
-                label:'Ganancia estimada',
-                data:{json.dumps(gain_values)},
-                borderColor:'#34d399',
-                backgroundColor:'rgba(52,211,153,.15)',
-                tension:.35,
-                fill:true
-            }}]
-        }},
-        options:{{ responsive:true, plugins:{{legend:{{labels:{{color:'#e5e7eb'}}}}}}, scales:{{x:{{ticks:{{color:'#94a3b8'}}}},y:{{ticks:{{color:'#94a3b8'}}}}}} }}
+        data:{{labels:{json.dumps(gain_labels)},datasets:[{{label:'Ganancia estimada',data:{json.dumps(gain_values)},borderColor:'#34d399',backgroundColor:'rgba(52,211,153,.15)',tension:.35,fill:true}}]}},
+        options:{{responsive:true,plugins:{{legend:{{labels:{{color:'#e5e7eb'}}}}}},scales:{{x:{{ticks:{{color:'#94a3b8'}}}},y:{{ticks:{{color:'#94a3b8'}}}}}}}}
     }});
     </script>
     """
 
 
 def render_monitor_plays(cur):
-    cur.execute("""
-        SELECT artist_name, track_name, COUNT(*) plays
-        FROM scrobbles
-        WHERE DATE_TRUNC('month',scrobble_time)=DATE_TRUNC('month',CURRENT_DATE)
-        GROUP BY artist_name, track_name
+    where, params = month_where("s")
+
+    cur.execute(f"""
+        SELECT s.artist_name, s.track_name, COUNT(*) AS plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY s.artist_name, s.track_name
         HAVING COUNT(*) < 1000
         ORDER BY plays DESC
         LIMIT 150
-    """)
+    """, params)
     rows = cur.fetchall()
 
     near = len([r for r in rows if safe_int(r["plays"]) >= 900])
@@ -600,7 +638,6 @@ def render_monitor_plays(cur):
     for r in rows:
         plays = safe_int(r["plays"])
         faltan = 1000 - plays
-
         if plays >= 900:
             estado = '<span class="badge ok">🔥 Cerca</span>'
         elif plays >= 800:
@@ -610,12 +647,8 @@ def render_monitor_plays(cur):
 
         table_rows += f"""
         <tr>
-            <td>{r['artist_name']}</td>
-            <td>{r['track_name']}</td>
-            <td>{plays}</td>
-            <td>{faltan}</td>
-            <td>Dar {faltan} reproducciones</td>
-            <td>{estado}</td>
+            <td>{r['artist_name']}</td><td>{r['track_name']}</td><td>{plays}</td><td>{faltan}</td>
+            <td>Dar {faltan} reproducciones</td><td>{estado}</td>
         </tr>
         """
 
@@ -623,6 +656,8 @@ def render_monitor_plays(cur):
         table_rows = '<tr><td colspan="6" class="muted">No hay canciones debajo de 1000.</td></tr>'
 
     return f"""
+    {filter_form("monitor-plays")}
+
     <div class="grid-3">
         <div class="card"><div class="label">🔥 Cerca 900-999</div><div class="value green">{near}</div></div>
         <div class="card"><div class="label">⚠️ Push 800-899</div><div class="value yellow">{push}</div></div>
@@ -638,11 +673,7 @@ def render_monitor_plays(cur):
 
     <div class="section-title">Monitor Plays Pro</div>
     <table>
-        <thead>
-            <tr>
-                <th>Artista</th><th>Canción</th><th>Plays</th><th>Faltan 1K</th><th>Recomendación</th><th>Estado</th>
-            </tr>
-        </thead>
+        <thead><tr><th>Artista</th><th>Canción</th><th>Plays</th><th>Faltan 1K</th><th>Recomendación</th><th>Estado</th></tr></thead>
         <tbody>{table_rows}</tbody>
     </table>
     """
