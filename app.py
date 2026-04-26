@@ -118,11 +118,11 @@ def start_logged_job(script_name, job_name):
 
             try:
                 result = subprocess.run(
-                    [sys.executable, os.path.join(os.getcwd(), script_name)],
-                    stdout=f,
-                    stderr=f,
-                    text=True,
-                )
+    [sys.executable, "-u", os.path.join(os.getcwd(), script_name)],
+    stdout=f,
+    stderr=f,
+    text=True,
+)
 
                 f.write("\n==================== FINISHED ====================\n")
                 f.write(f"FINISHED UTC: {datetime.utcnow()}\n")
