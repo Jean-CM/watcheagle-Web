@@ -42,11 +42,12 @@ def avg_rate(platform):
 def current_filters():
     month = (request.args.get("month") or "").strip()
     platform = (request.args.get("platform") or "").strip().lower()
-    return month, platform
+    distributor = (request.args.get("distributor") or "").strip()
+    return month, platform, distributor
 
 
 def month_where(alias="s"):
-    month, platform = current_filters()
+    month, platform, distributor = current_filters()
     clauses = []
     params = []
 
@@ -62,30 +63,48 @@ def month_where(alias="s"):
         clauses.append(f"LOWER({alias}.app_name) = %s")
         params.append(platform)
 
+    if distributor:
+        clauses.append(f"""
+            EXISTS (
+                SELECT 1
+                FROM artist_metadata am
+                WHERE LOWER(am.artist_name) = LOWER({alias}.artist_name)
+                AND am.distributor = %s
+            )
+        """)
+        params.append(distributor)
+
     return " AND ".join(clauses), params
 
 
 def filter_query(view):
-    month, platform = current_filters()
+    month, platform, distributor = current_filters()
     q = f"?view={view}"
+
     if month:
         q += f"&month={month}"
     if platform:
         q += f"&platform={platform}"
+    if distributor:
+        q += f"&distributor={distributor}"
+
     return q
 
 
 def filter_form(view):
-    month, platform = current_filters()
+    month, platform, distributor = current_filters()
+
     return f"""
     <div class="card" style="margin-bottom:18px;">
         <div class="section-title">Filtros</div>
         <form class="form-grid" method="GET" action="/">
             <input type="hidden" name="view" value="{view}">
+
             <div class="field">
                 <label>Mes</label>
                 <input type="month" name="month" value="{month}">
             </div>
+
             <div class="field">
                 <label>Plataforma</label>
                 <select name="platform">
@@ -96,33 +115,51 @@ def filter_form(view):
                     <option value="youtube" {"selected" if platform == "youtube" else ""}>YouTube Music</option>
                 </select>
             </div>
-            <div></div>
+
+            <div class="field">
+                <label>Distribuidora</label>
+                <select name="distributor">
+                    <option value="" {"selected" if not distributor else ""}>Todas</option>
+                    <option value="Distrokid" {"selected" if distributor == "Distrokid" else ""}>Distrokid</option>
+                    <option value="Ditto" {"selected" if distributor == "Ditto" else ""}>Ditto</option>
+                    <option value="TuneCore" {"selected" if distributor == "TuneCore" else ""}>TuneCore</option>
+                    <option value="Symphonic" {"selected" if distributor == "Symphonic" else ""}>Symphonic</option>
+                </select>
+            </div>
+
             <button class="btn btn-primary">Aplicar</button>
         </form>
     </div>
     """
 
 
-def start_logged_job(script_name, job_name):
+def start_logged_job(script_name, job_name, extra_env=None):
     log_path = os.path.join(JOB_LOG_DIR, f"{job_name}.log")
 
     def task():
+        env = os.environ.copy()
+        if extra_env:
+            env.update(extra_env)
+
         with open(log_path, "w", encoding="utf-8") as f:
             f.write(f"JOB: {job_name}\n")
             f.write(f"SCRIPT: {script_name}\n")
             f.write(f"PATH: {os.path.join(os.getcwd(), script_name)}\n")
             f.write(f"PYTHON: {sys.executable}\n")
             f.write(f"STARTED UTC: {datetime.utcnow()}\n")
+            if extra_env:
+                f.write(f"EXTRA_ENV: {extra_env}\n")
             f.write("\n==================== OUTPUT ====================\n\n")
             f.flush()
 
             try:
                 result = subprocess.run(
-    [sys.executable, "-u", os.path.join(os.getcwd(), script_name)],
-    stdout=f,
-    stderr=f,
-    text=True,
-)
+                    [sys.executable, "-u", os.path.join(os.getcwd(), script_name)],
+                    stdout=f,
+                    stderr=f,
+                    text=True,
+                    env=env,
+                )
 
                 f.write("\n==================== FINISHED ====================\n")
                 f.write(f"FINISHED UTC: {datetime.utcnow()}\n")
@@ -147,7 +184,7 @@ def run_python_script(script_name, timeout=900):
             return f"<pre>ERROR: No existe {script_path}</pre>", 500
 
         result = subprocess.run(
-            [sys.executable, script_path],
+            [sys.executable, "-u", script_path],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -304,7 +341,7 @@ input,select,textarea {{
     width:100%;
 }}
 textarea {{ min-height:95px; }}
-.form-grid {{ display:grid; grid-template-columns:1.2fr 1fr 1.2fr auto; gap:12px; align-items:end; }}
+.form-grid {{ display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:12px; align-items:end; }}
 .btn {{
     border:0;
     border-radius:12px;
@@ -349,11 +386,13 @@ pre {{
     <div class="tools">
         <a class="tool-link" href="/run-check">run-check</a>
         <a class="tool-link" href="/collect-now">collect-now</a>
-        <a class="tool-link" href="/collect-all">collect-all</a>
+        <a class="tool-link" href="/collect-all">collect-all todos</a>
         <a class="tool-link" href="/job-log?job=collect-now">log collect-now</a>
         <a class="tool-link" href="/job-log?job=collect-all">log collect-all</a>
+        <a class="tool-link" href="/job-log?job=collect-all-selected">log seleccionados</a>
         <a class="tool-link" href="/scrobbles-count">scrobbles-count</a>
         <a class="tool-link" href="/healthz">healthz</a>
+        <a class="tool-link" href="/init-artist-metadata">init distribuidoras</a>
     </div>
     {body}
 </div>
@@ -364,7 +403,7 @@ pre {{
 
 def render_monitor(cur):
     where, params = month_where("s")
-    _, platform = current_filters()
+    _, platform, _ = current_filters()
 
     cur.execute("""
         SELECT
@@ -399,8 +438,12 @@ def render_monitor(cur):
     for t in teams:
         rows += f"""
         <tr>
-            <td>{t['id']}</td><td>{t['name']}</td><td>{t['app_name']}</td><td>{t['lastfm_user']}</td>
-            <td>{badge(t['status'])}</td><td>{t['last_scrobble_at'] or '-'}</td>
+            <td><input type="checkbox" name="team_ids" value="{t['id']}"> {t['id']}</td>
+            <td>{t['name']}</td>
+            <td>{t['app_name']}</td>
+            <td>{t['lastfm_user']}</td>
+            <td>{badge(t['status'])}</td>
+            <td>{t['last_scrobble_at'] or '-'}</td>
             <td>{t['idle_minutes'] if t['idle_minutes'] is not None else '-'}</td>
             <td>{t['last_check_at'] or '-'}</td>
             <td>
@@ -463,16 +506,27 @@ def render_monitor(cur):
     </div>
 
     <div class="section-title">Estado de equipos</div>
-    <table>
-        <thead><tr><th>ID</th><th>Equipo</th><th>App</th><th>User</th><th>Status</th><th>Último scrobble</th><th>Idle</th><th>Último check</th><th>Acciones</th></tr></thead>
-        <tbody>{rows}</tbody>
-    </table>
+    <form method="POST" action="/collect-all-selected">
+        <div style="margin-bottom:12px;">
+            <button class="btn btn-primary" type="submit">Collect All seleccionados</button>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th><th>Equipo</th><th>App</th><th>User</th><th>Status</th>
+                    <th>Último scrobble</th><th>Idle</th><th>Último check</th><th>Acciones</th>
+                </tr>
+            </thead>
+            <tbody>{rows}</tbody>
+        </table>
+    </form>
     """
 
 
 def render_analisis(cur):
     where, params = month_where("s")
-    _, platform = current_filters()
+    _, platform, _ = current_filters()
 
     if platform:
         cur.execute(
@@ -520,6 +574,21 @@ def render_analisis(cur):
     artists = cur.fetchall()
     artist_html = "".join([f"<div class='mini-row'><span>{r['artist_name']}</span><strong>{r['plays']}</strong></div>" for r in artists]) or '<div class="muted">Sin datos</div>'
 
+    cur.execute(f"""
+        SELECT
+            COALESCE(am.distributor, 'Sin distribuidora') AS distributor,
+            COUNT(*) AS plays
+        FROM scrobbles s
+        LEFT JOIN artist_metadata am
+            ON LOWER(am.artist_name) = LOWER(s.artist_name)
+        WHERE {where}
+        GROUP BY COALESCE(am.distributor, 'Sin distribuidora')
+        ORDER BY plays DESC
+    """, params)
+    distributor_rows = cur.fetchall()
+    distributor_labels = [r["distributor"] for r in distributor_rows]
+    distributor_values = [safe_int(r["plays"]) for r in distributor_rows]
+
     avg_daily = round(plays_month / max(len(daily), 1), 2)
 
     return f"""
@@ -537,6 +606,11 @@ def render_analisis(cur):
         <canvas id="playsChart"></canvas>
     </div>
 
+    <div class="card" style="margin-bottom:18px;">
+        <div class="section-title">Reproducciones por distribuidora</div>
+        <canvas id="distributorChart"></canvas>
+    </div>
+
     <div class="grid-2">
         <div class="card"><div class="section-title">Top artistas</div>{artist_html}</div>
         <div>
@@ -548,8 +622,41 @@ def render_analisis(cur):
     <script>
     new Chart(document.getElementById('playsChart'), {{
         type:'line',
-        data:{{labels:{json.dumps(labels)},datasets:[{{label:'Reproducciones',data:{json.dumps(values)},borderColor:'#60a5fa',backgroundColor:'rgba(96,165,250,.15)',tension:.35,fill:true}}]}},
-        options:{{responsive:true,plugins:{{legend:{{labels:{{color:'#e5e7eb'}}}}}},scales:{{x:{{ticks:{{color:'#94a3b8'}}}},y:{{ticks:{{color:'#94a3b8'}}}}}}}}
+        data:{{
+            labels:{json.dumps(labels)},
+            datasets:[{{
+                label:'Reproducciones',
+                data:{json.dumps(values)},
+                borderColor:'#60a5fa',
+                backgroundColor:'rgba(96,165,250,.15)',
+                tension:.35,
+                fill:true
+            }}]
+        }},
+        options:{{
+            responsive:true,
+            plugins:{{legend:{{labels:{{color:'#e5e7eb'}}}}}},
+            scales:{{x:{{ticks:{{color:'#94a3b8'}}}},y:{{ticks:{{color:'#94a3b8'}}}}}}
+        }}
+    }});
+
+    new Chart(document.getElementById('distributorChart'), {{
+        type:'bar',
+        data:{{
+            labels:{json.dumps(distributor_labels)},
+            datasets:[{{
+                label:'Reproducciones por distribuidora',
+                data:{json.dumps(distributor_values)},
+                backgroundColor:'rgba(168,85,247,.35)',
+                borderColor:'#a855f7',
+                borderWidth:1
+            }}]
+        }},
+        options:{{
+            responsive:true,
+            plugins:{{legend:{{labels:{{color:'#e5e7eb'}}}}}},
+            scales:{{x:{{ticks:{{color:'#94a3b8'}}}},y:{{ticks:{{color:'#94a3b8'}}}}}}
+        }}
     }});
     </script>
     """
@@ -662,8 +769,22 @@ def render_ganancias(cur):
     <script>
     new Chart(document.getElementById('gainChart'), {{
         type:'line',
-        data:{{labels:{json.dumps(gain_labels)},datasets:[{{label:'Ganancia estimada',data:{json.dumps(gain_values)},borderColor:'#34d399',backgroundColor:'rgba(52,211,153,.15)',tension:.35,fill:true}}]}},
-        options:{{responsive:true,plugins:{{legend:{{labels:{{color:'#e5e7eb'}}}}}},scales:{{x:{{ticks:{{color:'#94a3b8'}}}},y:{{ticks:{{color:'#94a3b8'}}}}}}}}
+        data:{{
+            labels:{json.dumps(gain_labels)},
+            datasets:[{{
+                label:'Ganancia estimada',
+                data:{json.dumps(gain_values)},
+                borderColor:'#34d399',
+                backgroundColor:'rgba(52,211,153,.15)',
+                tension:.35,
+                fill:true
+            }}]
+        }},
+        options:{{
+            responsive:true,
+            plugins:{{legend:{{labels:{{color:'#e5e7eb'}}}}}},
+            scales:{{x:{{ticks:{{color:'#94a3b8'}}}},y:{{ticks:{{color:'#94a3b8'}}}}}}
+        }}
     }});
     </script>
     """
@@ -691,6 +812,7 @@ def render_monitor_plays(cur):
     for r in rows:
         plays = safe_int(r["plays"])
         faltan = 1000 - plays
+
         if plays >= 900:
             estado = '<span class="badge ok">🔥 Cerca</span>'
         elif plays >= 800:
@@ -876,6 +998,29 @@ def collect_all():
     return redirect("/job-log?job=collect-all")
 
 
+@app.route("/collect-all-selected", methods=["POST"])
+def collect_all_selected():
+    team_ids = request.form.getlist("team_ids")
+
+    if not team_ids:
+        return """
+        <body style="background:#061126;color:white;font-family:Arial;padding:24px;">
+            <h2>No seleccionaste equipos</h2>
+            <a style="color:#93c5fd;" href="/">Volver</a>
+        </body>
+        """
+
+    ids_text = ",".join(team_ids)
+
+    start_logged_job(
+        "backfill_scrobbles.py",
+        "collect-all-selected",
+        extra_env={"TEAM_IDS": ids_text},
+    )
+
+    return redirect("/job-log?job=collect-all-selected")
+
+
 @app.route("/collect_now")
 def collect_now_alias():
     return collect_now()
@@ -928,6 +1073,58 @@ def job_log():
     </body>
     </html>
     """
+
+
+@app.route("/init-artist-metadata")
+def init_artist_metadata():
+    data = [
+        ("Jeantune", "Jean C", "Distrokid"),
+        ("JCSTUDIO", "Jean C", "Distrokid"),
+        ("JMAR", "Jean C", "Ditto"),
+        ("YlegMoon", "Angely", "Distrokid"),
+        ("Batytune", "Angely", "Distrokid"),
+        ("Jzentrix", "Dari", "Distrokid"),
+        ("JironPulse", "Micha", "Distrokid"),
+        ("God Herd", "Jean C", "TuneCore"),
+        ("JJ Legacy", "Jean C", "Symphonic"),
+        ("Cielaurum", "Angely", "Ditto"),
+        ("QuietMetric", "Dari", "Ditto"),
+        ("AetherFocus", "Jean C", "Ditto"),
+        ("ZukiPop", "Jean C", "Distrokid"),
+        ("LexiGo", "Jean C", "Distrokid"),
+        ("VYRONEX", "Jean C", "Distrokid"),
+        ("AEROVIA", "Jean C", "Distrokid"),
+        ("TechMich", "Micha", "Distrokid"),
+        ("KRYONEXIS", "Angy", "Symphonic"),
+    ]
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS artist_metadata (
+            id SERIAL PRIMARY KEY,
+            artist_name TEXT UNIQUE NOT NULL,
+            author TEXT,
+            distributor TEXT
+        )
+    """)
+
+    for artist, author, distributor in data:
+        cur.execute("""
+            INSERT INTO artist_metadata (artist_name, author, distributor)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (artist_name)
+            DO UPDATE SET
+                author = EXCLUDED.author,
+                distributor = EXCLUDED.distributor
+        """, (artist, author, distributor))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({"ok": True, "inserted_or_updated": len(data)})
 
 
 @app.route("/healthz")
