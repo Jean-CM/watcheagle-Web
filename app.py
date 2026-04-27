@@ -10,7 +10,7 @@ from helpers import get_conn, init_db
 app = Flask(__name__)
 
 PLATFORM_RATES = {
-    "spotify": {"min": 0.0030, "max": 0.0050},
+    "spotify": {"min": 0.0035, "max": 0.0050},
     "apple": {"min": 0.0070, "max": 0.0100},
     "apple music": {"min": 0.0070, "max": 0.0100},
     "tidal": {"min": 0.0120, "max": 0.0150},
@@ -1088,7 +1088,7 @@ def init_artist_metadata():
         ("God Herd", "Jean C", "TuneCore"),
         ("JJ Legacy", "Jean C", "Symphonic"),
         ("Cielaurum", "Angely", "Ditto"),
-        ("QuietMetric", "Dari", "Ditto"),
+        ("QuietMetric, Dhariana Mateo", "Dari", "Ditto"),
         ("AetherFocus", "Jean C", "Ditto"),
         ("ZukiPop", "Jean C", "Distrokid"),
         ("LexiGo", "Jean C", "Distrokid"),
