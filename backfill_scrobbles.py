@@ -1,3 +1,5 @@
+import os
+
 from helpers import (
     init_db,
     get_active_teams,
@@ -10,11 +12,26 @@ from helpers import (
     finish_job,
 )
 
-JOB_NAME = "run-backfill-full"
+JOB_NAME = "run-backfill-full-selected"
 
 
 def log(msg):
     print(msg, flush=True)
+
+
+def filter_teams_by_env(teams):
+    raw_ids = os.environ.get("TEAM_IDS", "").strip()
+
+    if not raw_ids:
+        return teams
+
+    ids = set()
+    for x in raw_ids.split(","):
+        x = x.strip()
+        if x.isdigit():
+            ids.add(int(x))
+
+    return [t for t in teams if int(t["id"]) in ids]
 
 
 def main():
@@ -27,9 +44,10 @@ def main():
     errors = 0
 
     teams = get_active_teams()
+    teams = filter_teams_by_env(teams)
 
     log("===== BACKFILL HISTÓRICO FULL WATCHEAGLE =====")
-    log(f"Equipos activos: {len(teams)}")
+    log(f"Equipos seleccionados: {len(teams)}")
     log(f"BACKFILL_LIMIT: {BACKFILL_LIMIT}")
     log(f"BACKFILL_MAX_PAGES: {BACKFILL_MAX_PAGES}")
     log("Modo: FULL, no se detiene por duplicados")
@@ -49,11 +67,7 @@ def main():
             for page in range(1, BACKFILL_MAX_PAGES + 1):
                 log(f"[PAGE] {team_name} | {lastfm_user} | página={page}")
 
-                data = fetch_recent_tracks(
-                    lastfm_user,
-                    limit=BACKFILL_LIMIT,
-                    page=page,
-                )
+                data = fetch_recent_tracks(lastfm_user, limit=BACKFILL_LIMIT, page=page)
 
                 if "error" in data:
                     msg = (
@@ -104,12 +118,8 @@ def main():
                 log(msg)
                 lines.append(msg)
 
-                # Si Last.fm devuelve menos tracks que el límite, ya llegamos al final disponible.
                 if len(tracks) < BACKFILL_LIMIT:
-                    log(
-                        f"[STOP] {team_name} | {lastfm_user} | página={page} "
-                        f"trajo {len(tracks)} tracks, menor que BACKFILL_LIMIT. Fin del histórico disponible."
-                    )
+                    log(f"[STOP] {team_name} | fin del histórico disponible.")
                     break
 
             done = (
