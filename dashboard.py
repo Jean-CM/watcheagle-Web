@@ -3,56 +3,58 @@ import pandas as pd
 import plotly.express as px
 from helpers import get_conn, init_db, PLATFORM_RATES
 
-# 1. Configuración Pro
-st.set_page_config(page_title="WatchEagle Control", layout="wide")
+# Configuración de la interfaz
+st.set_page_config(
+    page_title="WatchEagle Pro Dashboard",
+    page_icon="🦅",
+    layout="wide", # Usa todo el ancho de la pantalla
+    initial_sidebar_state="expanded"
+)
 
-# Inicializar DB (como en tus scripts)
-init_db() [cite: 6]
-
-# Estilo personalizado para que se vea "duro"
-st.markdown("""
-    <style>
-    .main { background-color: #061126; }
-    div[data-testid="stMetricValue"] { font-size: 28px; font-weight: 900; color: #60a5fa; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- SIDEBAR (Filtros) ---
-st.sidebar.title("🦅 WatchEagle Menu")
-view = st.sidebar.radio("Ir a:", ["Monitor Operativo", "Análisis de Ganancias"])
-selected_platform = st.sidebar.selectbox("Plataforma", ["Todas", "Spotify", "Apple Music", "Tidal", "YouTube"])
-
-# --- DATA LOADING ---
+# Inicializar DB y Cargar Datos
 def load_data():
-    conn = get_conn() [cite: 6]
-    query = "SELECT * FROM scrobbles"
+    init_db() # Asegura que las tablas existen 
+    conn = get_conn()
+    # Traemos los scrobbles y unimos con metadata si existe
+    query = """
+        SELECT s.*, am.distributor 
+        FROM scrobbles s
+        LEFT JOIN artist_metadata am ON LOWER(s.artist_name) = LOWER(am.artist_name)
+    """
     df = pd.read_sql(query, conn)
     conn.close()
     return df
 
-df = load_data()
+# --- INTERFAZ ---
+st.title("🦅 WatchEagle: Inteligencia de Streaming")
 
-# --- CUERPO PRINCIPAL ---
-st.title(f"WatchEagle: {view}")
-
-if view == "Monitor Operativo":
-    # Aquí recreamos tu 'render_monitor'
-    col1, col2, col3 = st.columns(3)
+try:
+    df = load_data()
     
-    with col1:
-        st.metric("Total Scrobbles", len(df))
-    with col2:
-        # Lógica de 'monitor-plays': cuantos bajo 1000 
-        under_1k = df.groupby('track_name').size()
-        under_1k = under_1k[under_1k < 1000].count()
-        st.metric("Tracks < 1000 Plays", under_1k, delta="-2", delta_color="inverse")
+    # Barra Lateral con Filtros Interactivos
+    st.sidebar.header("Filtros Globales")
     
-    # Gráfica interactiva de reproducción por hora
-    df['hora'] = pd.to_datetime(df['scrobble_time']).dt.hour
-    fig = px.histogram(df, x="hora", title="Actividad por Hora (Heatmap de Granja)", color_discrete_sequence=['#a855f7'])
-    st.plotly_chart(fig, use_container_width=True)
+    # Filtro de Plataforma 
+    plataformas = ["Todas"] + sorted(df['app_name'].unique().tolist())
+    sel_platform = st.sidebar.selectbox("Selecciona Plataforma", plataformas)
+    
+    # Filtro de Distribuidora
+    distribuidores = ["Todas"] + sorted(df['distributor'].dropna().unique().tolist())
+    sel_dist = st.sidebar.selectbox("Selecciona Distribuidora", distribuidores)
 
-elif view == "Análisis de Ganancias":
-    # Aquí usamos tus PLATFORM_RATES 
-    st.subheader("Estimación de Royalties")
-    # ... lógica de cálculos ...
+    # Aplicar Filtros al DataFrame
+    filtered_df = df.copy()
+    if sel_platform != "Todas":
+        filtered_df = filtered_df[filtered_df['app_name'] == sel_platform]
+    if sel_dist != "Todas":
+        filtered_df = filtered_df[filtered_df['distributor'] == sel_dist]
+
+    # Mostrar métricas rápidas (Solo el esqueleto por ahora)
+    st.subheader("Métricas en Tiempo Real")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Plays", len(filtered_df))
+    c2.metric("Artistas Únicos", filtered_df['artist_name'].nunique())
+    c3.metric("Equipos Activos", filtered_df['lastfm_user'].nunique())
+
+except Exception as e:
+    st.error(f"Error al conectar con la base de datos: {e}")
