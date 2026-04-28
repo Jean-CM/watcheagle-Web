@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import os
 
 # Importamos tus funciones de confianza
-from helpers import get_conn, init_db, PLATFORM_RATES
+from app import get_conn, init_db, PLATFORM_RATES
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
