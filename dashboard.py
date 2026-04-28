@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, timezone
+from datetime import datetime
 import os
 
-# Importamos tus funciones de confianza
-from app import get_conn, init_db, PLATFORM_RATES
+# Importamos la conexión de helpers y los RATES de app.py
+from helpers import get_conn, init_db
+from app import PLATFORM_RATES  # <--- AQUÍ LEEMOS DE APP.PY DIRECTAMENTE
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
