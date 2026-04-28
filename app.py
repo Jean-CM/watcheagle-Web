@@ -228,7 +228,8 @@ def badge(status):
 
 def base_page(title, view, body):
     nav = (
-        nav_link("Monitor", "monitor", view)
+        nav_link("Ejecutivo", "ejecutivo", view)
+        + nav_link("Monitor", "monitor", view)
         + nav_link("Análisis Pro", "analisis", view)
         + nav_link("Ganancias Pro", "ganancias", view)
         + nav_link("Monitor Plays", "monitor-plays", view)
@@ -854,16 +855,212 @@ def render_monitor_plays(cur):
     """
 
 
+def render_ejecutivo(cur):
+    where, params = month_where("s")
+
+    cur.execute("SELECT COUNT(*) total FROM teams WHERE active = TRUE")
+    equipos_activos = safe_int(cur.fetchone()["total"])
+
+    cur.execute("""
+        SELECT
+            SUM(CASE WHEN status='OK' THEN 1 ELSE 0 END) ok_count,
+            SUM(CASE WHEN status='WARN' THEN 1 ELSE 0 END) warn_count,
+            SUM(CASE WHEN status='INCIDENT' THEN 1 ELSE 0 END) incident_count
+        FROM teams
+        WHERE active = TRUE
+    """)
+    estado = cur.fetchone() or {}
+
+    cur.execute(f"SELECT COUNT(*) total FROM scrobbles s WHERE {where}", params)
+    plays_filtrados = safe_int(cur.fetchone()["total"])
+
+    cur.execute("""
+        SELECT COUNT(*) total
+        FROM scrobbles
+        WHERE DATE(scrobble_time) = CURRENT_DATE
+    """)
+    plays_hoy = safe_int(cur.fetchone()["total"])
+
+    cur.execute(f"""
+        SELECT LOWER(s.app_name) AS platform, COUNT(*) AS plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY LOWER(s.app_name)
+    """, params)
+    plataformas = cur.fetchall()
+
+    ingreso_promedio = 0
+    for r in plataformas:
+        ingreso_promedio += safe_int(r["plays"]) * avg_rate(r["platform"])
+
+    cur.execute(f"""
+        SELECT s.artist_name, COUNT(*) AS plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY s.artist_name
+        ORDER BY plays DESC
+        LIMIT 8
+    """, params)
+    top_artistas = cur.fetchall()
+
+    top_rows = ""
+    for r in top_artistas:
+        top_rows += f"""
+        <tr>
+            <td>{r['artist_name']}</td>
+            <td>{safe_int(r['plays'])}</td>
+        </tr>
+        """
+
+    if not top_rows:
+        top_rows = '<tr><td colspan="2" class="muted">Sin datos disponibles</td></tr>'
+
+    cur.execute(f"""
+        SELECT s.artist_name, s.track_name, COUNT(*) AS plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY s.artist_name, s.track_name
+        HAVING COUNT(*) < 1000
+        ORDER BY plays DESC
+        LIMIT 8
+    """, params)
+    canciones_push = cur.fetchall()
+
+    push_rows = ""
+    for r in canciones_push:
+        plays = safe_int(r["plays"])
+        faltan = 1000 - plays
+        push_rows += f"""
+        <tr>
+            <td>{r['artist_name']}</td>
+            <td>{r['track_name']}</td>
+            <td>{plays}</td>
+            <td>{faltan}</td>
+        </tr>
+        """
+
+    if not push_rows:
+        push_rows = '<tr><td colspan="4" class="muted">No hay canciones debajo de 1000.</td></tr>'
+
+    ok_count = safe_int(estado.get("ok_count"))
+    warn_count = safe_int(estado.get("warn_count"))
+    incident_count = safe_int(estado.get("incident_count"))
+
+    salud = "OK"
+    salud_class = "green"
+
+    if incident_count > 0:
+        salud = "INCIDENT"
+        salud_class = "red"
+    elif warn_count > 0:
+        salud = "WARN"
+        salud_class = "yellow"
+
+    return f"""
+    {filter_form("ejecutivo")}
+
+    <div class="grid">
+        <div class="card">
+            <div class="label">Salud general</div>
+            <div class="value {salud_class}">{salud}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Plays hoy</div>
+            <div class="value blue">{plays_hoy}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Plays filtrados</div>
+            <div class="value">{plays_filtrados}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Ingreso estimado</div>
+            <div class="value green">{money(ingreso_promedio)}</div>
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="card">
+            <div class="label">Equipos activos</div>
+            <div class="value">{equipos_activos}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">OK</div>
+            <div class="value green">{ok_count}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">WARN</div>
+            <div class="value yellow">{warn_count}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">INCIDENT</div>
+            <div class="value red">{incident_count}</div>
+        </div>
+    </div>
+
+    <div class="grid-2">
+        <div>
+            <div class="section-title">Top artistas del período</div>
+            <table>
+                <thead>
+                    <tr><th>Artista</th><th>Plays</th></tr>
+                </thead>
+                <tbody>{top_rows}</tbody>
+            </table>
+        </div>
+
+        <div>
+            <div class="section-title">Canciones para empujar a 1K</div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Artista</th>
+                        <th>Canción</th>
+                        <th>Plays</th>
+                        <th>Faltan</th>
+                    </tr>
+                </thead>
+                <tbody>{push_rows}</tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="section-title">Resumen ejecutivo</div>
+        <div class="mini-row">
+            <span>Estado operativo general</span>
+            <strong class="{salud_class}">{salud}</strong>
+        </div>
+        <div class="mini-row">
+            <span>Prioridad comercial</span>
+            <strong>Empujar canciones cercanas a 1K</strong>
+        </div>
+        <div class="mini-row">
+            <span>Lectura rápida</span>
+            <strong>Monitorear WARN/INCIDENT antes de escalar plays</strong>
+        </div>
+    </div>
+    """
+
+
 @app.route("/")
 def home():
     try:
         init_db()
-        view = (request.args.get("view") or "monitor").strip().lower()
+        view = (request.args.get("view") or "ejecutivo").strip().lower()
 
         conn = get_conn()
         cur = conn.cursor()
 
-        if view == "analisis":
+        if view == "ejecutivo":
+            body = render_ejecutivo(cur)
+            title = "Tablero ejecutivo"
+        elif view == "analisis":
             body = render_analisis(cur)
             title = "Vista analítica pro"
         elif view == "ganancias":
