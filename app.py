@@ -5,6 +5,7 @@ import subprocess
 import json
 import threading
 from datetime import datetime
+
 from helpers import get_conn, init_db
 
 app = Flask(__name__)
@@ -18,9 +19,34 @@ PLATFORM_RATES = {
     "youtube music": {"min": 0.0007, "max": 0.0020},
 }
 
+ARTIST_METADATA = [
+    ("Jeantune", "Jean C", "Distrokid"),
+    ("JCSTUDIO", "Jean C", "Distrokid"),
+    ("JMAR", "Jean C", "Ditto"),
+    ("YlegMoon", "Angely", "Distrokid"),
+    ("Batytune", "Angely", "Distrokid"),
+    ("Jzentrix", "Dari", "Distrokid"),
+    ("JironPulse", "Micha", "Distrokid"),
+    ("God Herd", "Jean C", "TuneCore"),
+    ("JJ Legacy", "Jean C", "Symphonic"),
+    ("Cielaurum", "Angely", "Ditto"),
+    ("QuietMetric", "Dari", "Ditto"),
+    ("AetherFocus", "Jean C", "Ditto"),
+    ("ZukiPop", "Jean C", "Distrokid"),
+    ("LexiGo", "Jean C", "Distrokid"),
+    ("VYRONEX", "Jean C", "Distrokid"),
+    ("AEROVIA", "Jean C", "Distrokid"),
+    ("TechMich", "Micha", "Distrokid"),
+    ("KRYONEXIS", "Angy", "Symphonic"),
+]
+
 JOB_LOG_DIR = "/tmp/watcheagle_jobs"
 os.makedirs(JOB_LOG_DIR, exist_ok=True)
 
+
+# ============================================================
+# UTILIDADES
+# ============================================================
 
 def safe_int(v, d=0):
     try:
@@ -46,18 +72,35 @@ def current_filters():
     return month, platform, distributor
 
 
-def month_where(alias="s"):
-    month, platform, distributor = current_filters()
-    clauses = []
-    params = []
-
+def month_range(month):
     if month:
-        clauses.append(f"TO_CHAR({alias}.scrobble_time, 'YYYY-MM') = %s")
-        params.append(month)
+        start = datetime.strptime(month, "%Y-%m")
     else:
-        clauses.append(
-            f"DATE_TRUNC('month', {alias}.scrobble_time) = DATE_TRUNC('month', CURRENT_DATE)"
-        )
+        now = datetime.utcnow()
+        start = datetime(now.year, now.month, 1)
+
+    if start.month == 12:
+        end = datetime(start.year + 1, 1, 1)
+    else:
+        end = datetime(start.year, start.month + 1, 1)
+
+    return start, end
+
+
+def month_where(alias="s"):
+    """
+    Filtro optimizado.
+    Antes usábamos TO_CHAR(scrobble_time, 'YYYY-MM'), eso pone la DB lenta.
+    Ahora usamos rango de fechas para que PostgreSQL pueda usar índices.
+    """
+    month, platform, distributor = current_filters()
+    start, end = month_range(month)
+
+    clauses = [
+        f"{alias}.scrobble_time >= %s",
+        f"{alias}.scrobble_time < %s",
+    ]
+    params = [start, end]
 
     if platform:
         clauses.append(f"LOWER({alias}.app_name) = %s")
@@ -132,6 +175,10 @@ def filter_form(view):
     </div>
     """
 
+
+# ============================================================
+# JOBS / SUBPROCESOS
+# ============================================================
 
 def start_logged_job(script_name, job_name, extra_env=None):
     log_path = os.path.join(JOB_LOG_DIR, f"{job_name}.log")
@@ -209,6 +256,10 @@ STDERR:
     except Exception as e:
         return f"<pre>ERROR ejecutando {script_name}:\n{str(e)}</pre>", 500
 
+
+# ============================================================
+# UI
+# ============================================================
 
 def nav_link(label, view, current):
     active = "active" if view == current else ""
@@ -394,12 +445,106 @@ pre {{
         <a class="tool-link" href="/scrobbles-count">scrobbles-count</a>
         <a class="tool-link" href="/healthz">healthz</a>
         <a class="tool-link" href="/init-artist-metadata">init distribuidoras</a>
+        <a class="tool-link" href="/init-performance-indexes">init performance</a>
     </div>
     {body}
 </div>
 </body>
 </html>
 """
+
+
+# ============================================================
+# VISTAS
+# ============================================================
+
+def render_ejecutivo(cur):
+    where, params = month_where("s")
+
+    cur.execute(f"SELECT COUNT(*) AS plays FROM scrobbles s WHERE {where}", params)
+    plays = safe_int(cur.fetchone()["plays"])
+
+    cur.execute("""
+        SELECT
+            COUNT(*) total,
+            SUM(CASE WHEN status='OK' THEN 1 ELSE 0 END) ok_count,
+            SUM(CASE WHEN status='WARN' THEN 1 ELSE 0 END) warn_count,
+            SUM(CASE WHEN status='INCIDENT' THEN 1 ELSE 0 END) incident_count
+        FROM teams
+        WHERE active = TRUE
+    """)
+    st = cur.fetchone()
+
+    cur.execute(f"""
+        SELECT s.artist_name, COUNT(*) AS plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY s.artist_name
+        ORDER BY plays DESC
+        LIMIT 8
+    """, params)
+    artists = cur.fetchall()
+
+    artist_html = "".join([
+        f"<div class='mini-row'><span>{r['artist_name']}</span><strong>{r['plays']}</strong></div>"
+        for r in artists
+    ]) or '<div class="muted">Sin datos</div>'
+
+    cur.execute(f"""
+        SELECT COALESCE(am.distributor, 'Sin distribuidora') AS distributor, COUNT(*) AS plays
+        FROM scrobbles s
+        LEFT JOIN artist_metadata am ON LOWER(am.artist_name) = LOWER(s.artist_name)
+        WHERE {where}
+        GROUP BY COALESCE(am.distributor, 'Sin distribuidora')
+        ORDER BY plays DESC
+    """, params)
+    dist = cur.fetchall()
+
+    dist_labels = [r["distributor"] for r in dist]
+    dist_values = [safe_int(r["plays"]) for r in dist]
+
+    return f"""
+    {filter_form("ejecutivo")}
+
+    <div class="grid">
+        <div class="card"><div class="label">Plays filtrados</div><div class="value blue">{plays}</div></div>
+        <div class="card"><div class="label">Equipos activos</div><div class="value">{safe_int(st['total'])}</div></div>
+        <div class="card"><div class="label">OK</div><div class="value green">{safe_int(st['ok_count'])}</div></div>
+        <div class="card"><div class="label">Incidentes</div><div class="value red">{safe_int(st['incident_count'])}</div></div>
+    </div>
+
+    <div class="grid-2">
+        <div class="card">
+            <div class="section-title">Top artistas</div>
+            {artist_html}
+        </div>
+        <div class="card">
+            <div class="section-title">Plays por distribuidora</div>
+            <canvas id="execDistChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+    new Chart(document.getElementById('execDistChart'), {{
+        type:'bar',
+        data:{{
+            labels:{json.dumps(dist_labels)},
+            datasets:[{{
+                label:'Plays',
+                data:{json.dumps(dist_values)},
+                backgroundColor:'rgba(96,165,250,.30)',
+                borderColor:'#60a5fa',
+                borderWidth:1
+            }}]
+        }},
+        options:{{
+            responsive:true,
+            plugins:{{legend:{{labels:{{color:'#e5e7eb'}}}}}},
+            scales:{{x:{{ticks:{{color:'#94a3b8'}}}},y:{{ticks:{{color:'#94a3b8'}}}}}}
+        }}
+    }});
+    </script>
+    """
 
 
 def render_monitor(cur):
@@ -468,8 +613,10 @@ def render_monitor(cur):
             <div class="field"><label>Equipo</label><input name="name" placeholder="Box-01 01" required></div>
             <div class="field"><label>App</label>
                 <select name="app">
-                    <option value="spotify">spotify</option><option value="apple">apple</option>
-                    <option value="tidal">tidal</option><option value="youtube">youtube</option>
+                    <option value="spotify">spotify</option>
+                    <option value="apple">apple</option>
+                    <option value="tidal">tidal</option>
+                    <option value="youtube">youtube</option>
                 </select>
             </div>
             <div class="field"><label>Usuario Last.fm</label><input name="user" placeholder="equipoC01" required></div>
@@ -484,8 +631,10 @@ def render_monitor(cur):
                 <div class="field"><label>Prefijo</label><input name="prefix" placeholder="Box-03" required></div>
                 <div class="field"><label>App</label>
                     <select name="app">
-                        <option value="spotify">spotify</option><option value="apple">apple</option>
-                        <option value="tidal">tidal</option><option value="youtube">youtube</option>
+                        <option value="spotify">spotify</option>
+                        <option value="apple">apple</option>
+                        <option value="tidal">tidal</option>
+                        <option value="youtube">youtube</option>
                     </select>
                 </div>
             </div>
@@ -529,13 +678,14 @@ def render_analisis(cur):
     where, params = month_where("s")
     _, platform, _ = current_filters()
 
+    today_where = "DATE(s.scrobble_time)=CURRENT_DATE"
+    today_params = []
+
     if platform:
-        cur.execute(
-            "SELECT COUNT(*) c FROM scrobbles s WHERE DATE(s.scrobble_time)=CURRENT_DATE AND LOWER(s.app_name)=%s",
-            (platform,),
-        )
-    else:
-        cur.execute("SELECT COUNT(*) c FROM scrobbles s WHERE DATE(s.scrobble_time)=CURRENT_DATE")
+        today_where += " AND LOWER(s.app_name)=%s"
+        today_params.append(platform)
+
+    cur.execute(f"SELECT COUNT(*) c FROM scrobbles s WHERE {today_where}", today_params)
     plays_today = safe_int(cur.fetchone()["c"])
 
     cur.execute(f"SELECT COUNT(*) c FROM scrobbles s WHERE {where}", params)
@@ -562,7 +712,11 @@ def render_analisis(cur):
         LIMIT 25
     """, params)
     users = cur.fetchall()
-    user_rows = "".join([f"<tr><td>{r['lastfm_user']}</td><td>{r['plays']}</td></tr>" for r in users]) or '<tr><td colspan="2" class="muted">Sin datos</td></tr>'
+
+    user_rows = "".join([
+        f"<tr><td>{r['lastfm_user']}</td><td>{r['plays']}</td></tr>"
+        for r in users
+    ]) or '<tr><td colspan="2" class="muted">Sin datos</td></tr>'
 
     cur.execute(f"""
         SELECT s.artist_name, COUNT(*) AS plays
@@ -573,7 +727,11 @@ def render_analisis(cur):
         LIMIT 10
     """, params)
     artists = cur.fetchall()
-    artist_html = "".join([f"<div class='mini-row'><span>{r['artist_name']}</span><strong>{r['plays']}</strong></div>" for r in artists]) or '<div class="muted">Sin datos</div>'
+
+    artist_html = "".join([
+        f"<div class='mini-row'><span>{r['artist_name']}</span><strong>{r['plays']}</strong></div>"
+        for r in artists
+    ]) or '<div class="muted">Sin datos</div>'
 
     cur.execute(f"""
         SELECT
@@ -616,7 +774,10 @@ def render_analisis(cur):
         <div class="card"><div class="section-title">Top artistas</div>{artist_html}</div>
         <div>
             <div class="section-title">Reproducciones por usuario Last.fm</div>
-            <table><thead><tr><th>Usuario</th><th>Reproducciones</th></tr></thead><tbody>{user_rows}</tbody></table>
+            <table>
+                <thead><tr><th>Usuario</th><th>Reproducciones</th></tr></thead>
+                <tbody>{user_rows}</tbody>
+            </table>
         </div>
     </div>
 
@@ -719,7 +880,10 @@ def render_ganancias(cur):
     for r in raw_artists:
         artist_map[r["artist_name"]] = artist_map.get(r["artist_name"], 0) + safe_int(r["plays"]) * avg_rate(r["platform"])
 
-    artist_rows = "".join([f"<tr><td>{a}</td><td>{money(v)}</td></tr>" for a, v in sorted(artist_map.items(), key=lambda x: x[1], reverse=True)[:20]]) or '<tr><td colspan="2" class="muted">Sin datos</td></tr>'
+    artist_rows = "".join([
+        f"<tr><td>{a}</td><td>{money(v)}</td></tr>"
+        for a, v in sorted(artist_map.items(), key=lambda x: x[1], reverse=True)[:20]
+    ]) or '<tr><td colspan="2" class="muted">Sin datos</td></tr>'
 
     cur.execute(f"""
         SELECT s.lastfm_user, LOWER(s.app_name) AS platform, COUNT(*) AS plays
@@ -733,7 +897,10 @@ def render_ganancias(cur):
     for r in raw_users:
         user_map[r["lastfm_user"]] = user_map.get(r["lastfm_user"], 0) + safe_int(r["plays"]) * avg_rate(r["platform"])
 
-    user_rows = "".join([f"<tr><td>{u}</td><td>{money(v)}</td></tr>" for u, v in sorted(user_map.items(), key=lambda x: x[1], reverse=True)[:25]]) or '<tr><td colspan="2" class="muted">Sin datos</td></tr>'
+    user_rows = "".join([
+        f"<tr><td>{u}</td><td>{money(v)}</td></tr>"
+        for u, v in sorted(user_map.items(), key=lambda x: x[1], reverse=True)[:25]
+    ]) or '<tr><td colspan="2" class="muted">Sin datos</td></tr>'
 
     return f"""
     {filter_form("ganancias")}
@@ -752,7 +919,10 @@ def render_ganancias(cur):
     <div class="grid-2">
         <div>
             <div class="section-title">Ganancias por plataforma</div>
-            <table><thead><tr><th>Plataforma</th><th>Streams</th><th>Min</th><th>Max</th><th>Promedio</th></tr></thead><tbody>{platform_rows}</tbody></table>
+            <table>
+                <thead><tr><th>Plataforma</th><th>Streams</th><th>Min</th><th>Max</th><th>Promedio</th></tr></thead>
+                <tbody>{platform_rows}</tbody>
+            </table>
         </div>
         <div class="card">
             <div class="section-title">Recomendación ejecutiva</div>
@@ -763,8 +933,14 @@ def render_ganancias(cur):
     </div>
 
     <div class="grid-2">
-        <div><div class="section-title">Ganancias por artista</div><table><thead><tr><th>Artista</th><th>Ganancia</th></tr></thead><tbody>{artist_rows}</tbody></table></div>
-        <div><div class="section-title">Ganancias por usuario Last.fm</div><table><thead><tr><th>Usuario</th><th>Ganancia</th></tr></thead><tbody>{user_rows}</tbody></table></div>
+        <div>
+            <div class="section-title">Ganancias por artista</div>
+            <table><thead><tr><th>Artista</th><th>Ganancia</th></tr></thead><tbody>{artist_rows}</tbody></table>
+        </div>
+        <div>
+            <div class="section-title">Ganancias por usuario Last.fm</div>
+            <table><thead><tr><th>Usuario</th><th>Ganancia</th></tr></thead><tbody>{user_rows}</tbody></table>
+        </div>
     </div>
 
     <script>
@@ -801,7 +977,7 @@ def render_monitor_plays(cur):
         GROUP BY s.artist_name, s.track_name
         HAVING COUNT(*) < 1000
         ORDER BY plays DESC
-        LIMIT 150
+        LIMIT 200
     """, params)
     rows = cur.fetchall()
 
@@ -823,8 +999,12 @@ def render_monitor_plays(cur):
 
         table_rows += f"""
         <tr>
-            <td>{r['artist_name']}</td><td>{r['track_name']}</td><td>{plays}</td><td>{faltan}</td>
-            <td>Dar {faltan} reproducciones</td><td>{estado}</td>
+            <td>{r['artist_name']}</td>
+            <td>{r['track_name']}</td>
+            <td>{plays}</td>
+            <td>{faltan}</td>
+            <td>Dar {faltan} reproducciones</td>
+            <td>{estado}</td>
         </tr>
         """
 
@@ -849,204 +1029,17 @@ def render_monitor_plays(cur):
 
     <div class="section-title">Monitor Plays Pro</div>
     <table>
-        <thead><tr><th>Artista</th><th>Canción</th><th>Plays</th><th>Faltan 1K</th><th>Recomendación</th><th>Estado</th></tr></thead>
+        <thead>
+            <tr><th>Artista</th><th>Canción</th><th>Plays</th><th>Faltan 1K</th><th>Recomendación</th><th>Estado</th></tr>
+        </thead>
         <tbody>{table_rows}</tbody>
     </table>
     """
 
 
-def render_ejecutivo(cur):
-    where, params = month_where("s")
-
-    cur.execute("SELECT COUNT(*) total FROM teams WHERE active = TRUE")
-    equipos_activos = safe_int(cur.fetchone()["total"])
-
-    cur.execute("""
-        SELECT
-            SUM(CASE WHEN status='OK' THEN 1 ELSE 0 END) ok_count,
-            SUM(CASE WHEN status='WARN' THEN 1 ELSE 0 END) warn_count,
-            SUM(CASE WHEN status='INCIDENT' THEN 1 ELSE 0 END) incident_count
-        FROM teams
-        WHERE active = TRUE
-    """)
-    estado = cur.fetchone() or {}
-
-    cur.execute(f"SELECT COUNT(*) total FROM scrobbles s WHERE {where}", params)
-    plays_filtrados = safe_int(cur.fetchone()["total"])
-
-    cur.execute("""
-        SELECT COUNT(*) total
-        FROM scrobbles
-        WHERE DATE(scrobble_time) = CURRENT_DATE
-    """)
-    plays_hoy = safe_int(cur.fetchone()["total"])
-
-    cur.execute(f"""
-        SELECT LOWER(s.app_name) AS platform, COUNT(*) AS plays
-        FROM scrobbles s
-        WHERE {where}
-        GROUP BY LOWER(s.app_name)
-    """, params)
-    plataformas = cur.fetchall()
-
-    ingreso_promedio = 0
-    for r in plataformas:
-        ingreso_promedio += safe_int(r["plays"]) * avg_rate(r["platform"])
-
-    cur.execute(f"""
-        SELECT s.artist_name, COUNT(*) AS plays
-        FROM scrobbles s
-        WHERE {where}
-        GROUP BY s.artist_name
-        ORDER BY plays DESC
-        LIMIT 8
-    """, params)
-    top_artistas = cur.fetchall()
-
-    top_rows = ""
-    for r in top_artistas:
-        top_rows += f"""
-        <tr>
-            <td>{r['artist_name']}</td>
-            <td>{safe_int(r['plays'])}</td>
-        </tr>
-        """
-
-    if not top_rows:
-        top_rows = '<tr><td colspan="2" class="muted">Sin datos disponibles</td></tr>'
-
-    cur.execute(f"""
-        SELECT s.artist_name, s.track_name, COUNT(*) AS plays
-        FROM scrobbles s
-        WHERE {where}
-        GROUP BY s.artist_name, s.track_name
-        HAVING COUNT(*) < 1000
-        ORDER BY plays DESC
-        LIMIT 8
-    """, params)
-    canciones_push = cur.fetchall()
-
-    push_rows = ""
-    for r in canciones_push:
-        plays = safe_int(r["plays"])
-        faltan = 1000 - plays
-        push_rows += f"""
-        <tr>
-            <td>{r['artist_name']}</td>
-            <td>{r['track_name']}</td>
-            <td>{plays}</td>
-            <td>{faltan}</td>
-        </tr>
-        """
-
-    if not push_rows:
-        push_rows = '<tr><td colspan="4" class="muted">No hay canciones debajo de 1000.</td></tr>'
-
-    ok_count = safe_int(estado.get("ok_count"))
-    warn_count = safe_int(estado.get("warn_count"))
-    incident_count = safe_int(estado.get("incident_count"))
-
-    salud = "OK"
-    salud_class = "green"
-
-    if incident_count > 0:
-        salud = "INCIDENT"
-        salud_class = "red"
-    elif warn_count > 0:
-        salud = "WARN"
-        salud_class = "yellow"
-
-    return f"""
-    {filter_form("ejecutivo")}
-
-    <div class="grid">
-        <div class="card">
-            <div class="label">Salud general</div>
-            <div class="value {salud_class}">{salud}</div>
-        </div>
-
-        <div class="card">
-            <div class="label">Plays hoy</div>
-            <div class="value blue">{plays_hoy}</div>
-        </div>
-
-        <div class="card">
-            <div class="label">Plays filtrados</div>
-            <div class="value">{plays_filtrados}</div>
-        </div>
-
-        <div class="card">
-            <div class="label">Ingreso estimado</div>
-            <div class="value green">{money(ingreso_promedio)}</div>
-        </div>
-    </div>
-
-    <div class="grid">
-        <div class="card">
-            <div class="label">Equipos activos</div>
-            <div class="value">{equipos_activos}</div>
-        </div>
-
-        <div class="card">
-            <div class="label">OK</div>
-            <div class="value green">{ok_count}</div>
-        </div>
-
-        <div class="card">
-            <div class="label">WARN</div>
-            <div class="value yellow">{warn_count}</div>
-        </div>
-
-        <div class="card">
-            <div class="label">INCIDENT</div>
-            <div class="value red">{incident_count}</div>
-        </div>
-    </div>
-
-    <div class="grid-2">
-        <div>
-            <div class="section-title">Top artistas del período</div>
-            <table>
-                <thead>
-                    <tr><th>Artista</th><th>Plays</th></tr>
-                </thead>
-                <tbody>{top_rows}</tbody>
-            </table>
-        </div>
-
-        <div>
-            <div class="section-title">Canciones para empujar a 1K</div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Artista</th>
-                        <th>Canción</th>
-                        <th>Plays</th>
-                        <th>Faltan</th>
-                    </tr>
-                </thead>
-                <tbody>{push_rows}</tbody>
-            </table>
-        </div>
-    </div>
-
-    <div class="card">
-        <div class="section-title">Resumen ejecutivo</div>
-        <div class="mini-row">
-            <span>Estado operativo general</span>
-            <strong class="{salud_class}">{salud}</strong>
-        </div>
-        <div class="mini-row">
-            <span>Prioridad comercial</span>
-            <strong>Empujar canciones cercanas a 1K</strong>
-        </div>
-        <div class="mini-row">
-            <span>Lectura rápida</span>
-            <strong>Monitorear WARN/INCIDENT antes de escalar plays</strong>
-        </div>
-    </div>
-    """
-
+# ============================================================
+# RUTAS PRINCIPALES
+# ============================================================
 
 @app.route("/")
 def home():
@@ -1057,9 +1050,9 @@ def home():
         conn = get_conn()
         cur = conn.cursor()
 
-        if view == "ejecutivo":
-            body = render_ejecutivo(cur)
-            title = "Tablero ejecutivo"
+        if view == "monitor":
+            body = render_monitor(cur)
+            title = "Monitoreo operativo"
         elif view == "analisis":
             body = render_analisis(cur)
             title = "Vista analítica pro"
@@ -1070,9 +1063,9 @@ def home():
             body = render_monitor_plays(cur)
             title = "Seguimiento de canciones debajo de 1000"
         else:
-            view = "monitor"
-            body = render_monitor(cur)
-            title = "Monitoreo operativo"
+            view = "ejecutivo"
+            body = render_ejecutivo(cur)
+            title = "Tablero ejecutivo"
 
         cur.close()
         conn.close()
@@ -1081,6 +1074,10 @@ def home():
     except Exception as e:
         return f"<pre>ERROR EN HOME:\n{str(e)}</pre>", 500
 
+
+# ============================================================
+# EQUIPOS
+# ============================================================
 
 @app.route("/seed-team")
 def seed_team():
@@ -1124,6 +1121,7 @@ def seed_batch():
 @app.route("/edit-team-form")
 def edit_team_form():
     team_id = request.args.get("id")
+
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT id,name,app_name,lastfm_user FROM teams WHERE id=%s", (team_id,))
@@ -1178,6 +1176,10 @@ def delete_team():
     return redirect("/?view=monitor")
 
 
+# ============================================================
+# JOBS
+# ============================================================
+
 @app.route("/run-check")
 def run_check():
     return run_python_script("watch_scrobbles.py", timeout=900)
@@ -1203,7 +1205,7 @@ def collect_all_selected():
         return """
         <body style="background:#061126;color:white;font-family:Arial;padding:24px;">
             <h2>No seleccionaste equipos</h2>
-            <a style="color:#93c5fd;" href="/">Volver</a>
+            <a style="color:#93c5fd;" href="/?view=monitor">Volver</a>
         </body>
         """
 
@@ -1272,29 +1274,12 @@ def job_log():
     """
 
 
+# ============================================================
+# INIT / HEALTH
+# ============================================================
+
 @app.route("/init-artist-metadata")
 def init_artist_metadata():
-    data = [
-        ("Jeantune", "Jean C", "Distrokid"),
-        ("JCSTUDIO", "Jean C", "Distrokid"),
-        ("JMAR", "Jean C", "Ditto"),
-        ("YlegMoon", "Angely", "Distrokid"),
-        ("Batytune", "Angely", "Distrokid"),
-        ("Jzentrix", "Dari", "Distrokid"),
-        ("JironPulse", "Micha", "Distrokid"),
-        ("God Herd", "Jean C", "TuneCore"),
-        ("JJ Legacy", "Jean C", "Symphonic"),
-        ("Cielaurum", "Angely", "Ditto"),
-        ("QuietMetric, Dhariana Mateo", "Dari", "Ditto"),
-        ("AetherFocus", "Jean C", "Ditto"),
-        ("ZukiPop", "Jean C", "Distrokid"),
-        ("LexiGo", "Jean C", "Distrokid"),
-        ("VYRONEX", "Jean C", "Distrokid"),
-        ("AEROVIA", "Jean C", "Distrokid"),
-        ("TechMich", "Micha", "Distrokid"),
-        ("KRYONEXIS", "Angy", "Symphonic"),
-    ]
-
     conn = get_conn()
     cur = conn.cursor()
 
@@ -1307,7 +1292,7 @@ def init_artist_metadata():
         )
     """)
 
-    for artist, author, distributor in data:
+    for artist, author, distributor in ARTIST_METADATA:
         cur.execute("""
             INSERT INTO artist_metadata (artist_name, author, distributor)
             VALUES (%s, %s, %s)
@@ -1321,7 +1306,33 @@ def init_artist_metadata():
     cur.close()
     conn.close()
 
-    return jsonify({"ok": True, "inserted_or_updated": len(data)})
+    return jsonify({"ok": True, "inserted_or_updated": len(ARTIST_METADATA)})
+
+
+@app.route("/init-performance-indexes")
+def init_performance_indexes():
+    conn = get_conn()
+    cur = conn.cursor()
+
+    statements = [
+        "CREATE INDEX IF NOT EXISTS idx_scrobbles_time ON scrobbles (scrobble_time)",
+        "CREATE INDEX IF NOT EXISTS idx_scrobbles_app_time ON scrobbles (LOWER(app_name), scrobble_time)",
+        "CREATE INDEX IF NOT EXISTS idx_scrobbles_artist_lower ON scrobbles (LOWER(artist_name))",
+        "CREATE INDEX IF NOT EXISTS idx_scrobbles_user_time ON scrobbles (lastfm_user, scrobble_time)",
+        "CREATE INDEX IF NOT EXISTS idx_scrobbles_artist_track_time ON scrobbles (artist_name, track_name, scrobble_time)",
+        "CREATE INDEX IF NOT EXISTS idx_artist_metadata_artist_lower ON artist_metadata (LOWER(artist_name))",
+        "CREATE INDEX IF NOT EXISTS idx_artist_metadata_distributor ON artist_metadata (distributor)",
+        "CREATE INDEX IF NOT EXISTS idx_teams_app ON teams (LOWER(app_name))",
+    ]
+
+    for sql in statements:
+        cur.execute(sql)
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    return jsonify({"ok": True, "created": len(statements)})
 
 
 @app.route("/healthz")
