@@ -460,6 +460,8 @@ pre {{
 
 def render_ejecutivo(cur):
     where, params = month_where("s")
+    month, platform, distributor = current_filters()
+    start, end = month_range(month)
 
     cur.execute(f"SELECT COUNT(*) AS plays FROM scrobbles s WHERE {where}", params)
     plays = safe_int(cur.fetchone()["plays"])
@@ -475,6 +477,50 @@ def render_ejecutivo(cur):
     """)
     st = cur.fetchone()
 
+    # ================= GANANCIAS EJECUTIVAS =================
+    cur.execute(f"""
+        SELECT LOWER(s.app_name) AS platform, COUNT(*) AS plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY LOWER(s.app_name)
+    """, params)
+    exec_platforms = cur.fetchall()
+
+    exec_total_min = 0
+    exec_total_max = 0
+
+    for r in exec_platforms:
+        p = (r["platform"] or "").lower()
+        platform_plays = safe_int(r["plays"])
+        rate = PLATFORM_RATES.get(p, PLATFORM_RATES["spotify"])
+        exec_total_min += platform_plays * rate["min"]
+        exec_total_max += platform_plays * rate["max"]
+
+    exec_avg_gain = (exec_total_min + exec_total_max) / 2
+
+    # ================= PROYECCIÓN MENSUAL =================
+    now = datetime.utcnow()
+
+    total_days_month = (end - start).days
+
+    if now < start:
+        elapsed_days = 0
+    elif now >= end:
+        elapsed_days = total_days_month
+    else:
+        elapsed_days = max(1, (now.date() - start.date()).days + 1)
+
+    daily_avg_plays = plays / max(elapsed_days, 1)
+    projected_plays = int(daily_avg_plays * total_days_month)
+
+    projected_avg_gain = 0
+    projected_max_gain = 0
+
+    if plays > 0:
+        projected_avg_gain = (exec_avg_gain / plays) * projected_plays
+        projected_max_gain = (exec_total_max / plays) * projected_plays
+
+    # ================= TOP ARTISTAS =================
     cur.execute(f"""
         SELECT s.artist_name, COUNT(*) AS plays
         FROM scrobbles s
@@ -490,6 +536,7 @@ def render_ejecutivo(cur):
         for r in artists
     ]) or '<div class="muted">Sin datos</div>'
 
+    # ================= DISTRIBUIDORA =================
     cur.execute(f"""
         SELECT COALESCE(am.distributor, 'Sin distribuidora') AS distributor, COUNT(*) AS plays
         FROM scrobbles s
@@ -503,14 +550,93 @@ def render_ejecutivo(cur):
     dist_labels = [r["distributor"] for r in dist]
     dist_values = [safe_int(r["plays"]) for r in dist]
 
+    # ================= PLAYS DIARIOS =================
+    cur.execute(f"""
+        SELECT DATE(s.scrobble_time) AS play_day, COUNT(*) AS plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY DATE(s.scrobble_time)
+        ORDER BY play_day ASC
+    """, params)
+    daily = cur.fetchall()
+
+    daily_labels = [str(r["play_day"])[5:] for r in daily]
+    daily_values = [safe_int(r["plays"]) for r in daily]
+
+    # ================= MENSAJE EJECUTIVO =================
+    if projected_plays > plays:
+        insight = f"Si mantiene este ritmo, el mes podría cerrar cerca de {projected_plays:,} plays."
+    else:
+        insight = "El mes ya está cerrado o sin datos suficientes para proyección."
+
     return f"""
     {filter_form("ejecutivo")}
 
     <div class="grid">
-        <div class="card"><div class="label">Plays filtrados</div><div class="value blue">{plays}</div></div>
-        <div class="card"><div class="label">Equipos activos</div><div class="value">{safe_int(st['total'])}</div></div>
-        <div class="card"><div class="label">OK</div><div class="value green">{safe_int(st['ok_count'])}</div></div>
-        <div class="card"><div class="label">Promedio estimado</div><div class="value">{money((total_min+total_max)/2)}</div></div>
+        <div class="card">
+            <div class="label">Plays filtrados</div>
+            <div class="value blue">{plays:,}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Ganancia promedio</div>
+            <div class="value green">{money(exec_avg_gain)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Ganancia máxima</div>
+            <div class="value yellow">{money(exec_total_max)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Proyección plays mes</div>
+            <div class="value">{projected_plays:,}</div>
+        </div>
+    </div>
+
+    <div class="grid-3">
+        <div class="card">
+            <div class="label">Proyección ganancia promedio</div>
+            <div class="value green">{money(projected_avg_gain)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Proyección ganancia máxima</div>
+            <div class="value yellow">{money(projected_max_gain)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Equipos activos</div>
+            <div class="value">{safe_int(st['total'])}</div>
+        </div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px;">
+        <div class="section-title">Resumen ejecutivo</div>
+        <div class="mini-row">
+            <span>{insight}</span>
+            <strong>Proyección</strong>
+        </div>
+        <div class="mini-row">
+            <span>Días considerados del mes</span>
+            <strong>{elapsed_days} / {total_days_month}</strong>
+        </div>
+        <div class="mini-row">
+            <span>Promedio diario de plays</span>
+            <strong>{round(daily_avg_plays, 2):,}</strong>
+        </div>
+    </div>
+
+    <div class="grid-2">
+        <div class="card">
+            <div class="section-title">Tendencia diaria</div>
+            <canvas id="execDailyChart"></canvas>
+        </div>
+
+        <div class="card">
+            <div class="section-title">Plays por distribuidora</div>
+            <canvas id="execDistChart"></canvas>
+        </div>
     </div>
 
     <div class="grid-2">
@@ -518,13 +644,37 @@ def render_ejecutivo(cur):
             <div class="section-title">Top artistas</div>
             {artist_html}
         </div>
+
         <div class="card">
-            <div class="section-title">Plays por distribuidora</div>
-            <canvas id="execDistChart"></canvas>
+            <div class="section-title">Lectura ejecutiva</div>
+            <div class="mini-row"><span>Ganancia actual promedio</span><strong>{money(exec_avg_gain)}</strong></div>
+            <div class="mini-row"><span>Ganancia actual máxima</span><strong>{money(exec_total_max)}</strong></div>
+            <div class="mini-row"><span>Proyección promedio mensual</span><strong>{money(projected_avg_gain)}</strong></div>
+            <div class="mini-row"><span>Proyección máxima mensual</span><strong>{money(projected_max_gain)}</strong></div>
         </div>
     </div>
 
     <script>
+    new Chart(document.getElementById('execDailyChart'), {{
+        type:'line',
+        data:{{
+            labels:{json.dumps(daily_labels)},
+            datasets:[{{
+                label:'Plays diarios',
+                data:{json.dumps(daily_values)},
+                borderColor:'#34d399',
+                backgroundColor:'rgba(52,211,153,.15)',
+                tension:.35,
+                fill:true
+            }}]
+        }},
+        options:{{
+            responsive:true,
+            plugins:{{legend:{{labels:{{color:'#e5e7eb'}}}}}},
+            scales:{{x:{{ticks:{{color:'#94a3b8'}}}},y:{{ticks:{{color:'#94a3b8'}}}}}}
+        }}
+    }});
+
     new Chart(document.getElementById('execDistChart'), {{
         type:'bar',
         data:{{
