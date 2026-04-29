@@ -20,24 +20,24 @@ PLATFORM_RATES = {
 }
 
 ARTIST_METADATA = [
-    ("Jeantune", "Distrokid"),
-    ("JCSTUDIO", "Distrokid"),
-    ("JMAR", "Ditto"),
-    ("YlegMoon", "Distrokid"),
-    ("Batytune", "Distrokid"),
-    ("Jzentrix", "Distrokid"),
-    ("JironPulse", "Distrokid"),
-    ("God Herd", "TuneCore"),
-    ("JJ Legacy", "Symphonic"),
-    ("Cielaurum", "Ditto"),
-    ("QuietMetric", "Ditto"),
-    ("AetherFocus", "Ditto"),
-    ("ZukiPop", "Distrokid"),
-    ("LexiGo", "Distrokid"),
-    ("VYRONEX", "Distrokid"),
-    ("AEROVIA", "Distrokid"),
-    ("TechMich", "Distrokid"),
-    ("KRYONEXIS", "Symphonic"),
+    ("Jeantune", "Jean C", "Distrokid"),
+    ("JCSTUDIO", "Jean C", "Distrokid"),
+    ("JMAR", "Jean C", "Ditto"),
+    ("YlegMoon", "Angely", "Distrokid"),
+    ("Batytune", "Angely", "Distrokid"),
+    ("Jzentrix", "Dari", "Distrokid"),
+    ("JironPulse", "Micha", "Distrokid"),
+    ("God Herd", "Jean C", "TuneCore"),
+    ("JJ Legacy", "Jean C", "Symphonic"),
+    ("Cielaurum", "Angely", "Ditto"),
+    ("QuietMetric", "Dari", "Ditto"),
+    ("AetherFocus", "Jean C", "Ditto"),
+    ("ZukiPop", "Jean C", "Distrokid"),
+    ("LexiGo", "Jean C", "Distrokid"),
+    ("VYRONEX", "Jean C", "Distrokid"),
+    ("AEROVIA", "Jean C", "Distrokid"),
+    ("TechMich", "Micha", "Distrokid"),
+    ("KRYONEXIS", "Angy", "Symphonic"),
 ]
 
 JOB_LOG_DIR = "/tmp/watcheagle_jobs"
@@ -467,11 +467,7 @@ def render_ejecutivo(cur):
     plays = safe_int(cur.fetchone()["plays"])
 
     cur.execute("""
-        SELECT
-            COUNT(*) total,
-            SUM(CASE WHEN status='OK' THEN 1 ELSE 0 END) ok_count,
-            SUM(CASE WHEN status='WARN' THEN 1 ELSE 0 END) warn_count,
-            SUM(CASE WHEN status='INCIDENT' THEN 1 ELSE 0 END) incident_count
+        SELECT COUNT(*) total
         FROM teams
         WHERE active = TRUE
     """)
@@ -501,7 +497,7 @@ def render_ejecutivo(cur):
     # ================= PROYECCIÓN MENSUAL =================
     now = datetime.utcnow()
 
-    total_days_month = (end - start).days
+    total_days_month = max((end - start).days, 1)
 
     if now < start:
         elapsed_days = 0
