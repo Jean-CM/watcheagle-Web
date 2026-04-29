@@ -20,24 +20,24 @@ PLATFORM_RATES = {
 }
 
 ARTIST_METADATA = [
-    ("Jeantune", "Jean C", "Distrokid"),
-    ("JCSTUDIO", "Jean C", "Distrokid"),
-    ("JMAR", "Jean C", "Ditto"),
-    ("YlegMoon", "Angely", "Distrokid"),
-    ("Batytune", "Angely", "Distrokid"),
-    ("Jzentrix", "Dari", "Distrokid"),
-    ("JironPulse", "Micha", "Distrokid"),
-    ("God Herd", "Jean C", "TuneCore"),
-    ("JJ Legacy", "Jean C", "Symphonic"),
-    ("Cielaurum", "Angely", "Ditto"),
-    ("QuietMetric", "Dari", "Ditto"),
-    ("AetherFocus", "Jean C", "Ditto"),
-    ("ZukiPop", "Jean C", "Distrokid"),
-    ("LexiGo", "Jean C", "Distrokid"),
-    ("VYRONEX", "Jean C", "Distrokid"),
-    ("AEROVIA", "Jean C", "Distrokid"),
-    ("TechMich", "Micha", "Distrokid"),
-    ("KRYONEXIS", "Angy", "Symphonic"),
+    ("Jeantune", "Distrokid"),
+    ("JCSTUDIO", "Distrokid"),
+    ("JMAR", "Ditto"),
+    ("YlegMoon", "Distrokid"),
+    ("Batytune", "Distrokid"),
+    ("Jzentrix", "Distrokid"),
+    ("JironPulse", "Distrokid"),
+    ("God Herd", "TuneCore"),
+    ("JJ Legacy", "Symphonic"),
+    ("Cielaurum", "Ditto"),
+    ("QuietMetric", "Ditto"),
+    ("AetherFocus", "Ditto"),
+    ("ZukiPop", "Distrokid"),
+    ("LexiGo", "Distrokid"),
+    ("VYRONEX", "Distrokid"),
+    ("AEROVIA", "Distrokid"),
+    ("TechMich", "Distrokid"),
+    ("KRYONEXIS", "Symphonic"),
 ]
 
 JOB_LOG_DIR = "/tmp/watcheagle_jobs"
@@ -510,7 +510,7 @@ def render_ejecutivo(cur):
         <div class="card"><div class="label">Plays filtrados</div><div class="value blue">{plays}</div></div>
         <div class="card"><div class="label">Equipos activos</div><div class="value">{safe_int(st['total'])}</div></div>
         <div class="card"><div class="label">OK</div><div class="value green">{safe_int(st['ok_count'])}</div></div>
-        <div class="card"><div class="label">Incidentes</div><div class="value red">{safe_int(st['incident_count'])}</div></div>
+        <div class="card"><div class="label">Promedio estimado</div><div class="value">{money((total_min+total_max)/2)}</div></div>
     </div>
 
     <div class="grid-2">
