@@ -9,6 +9,7 @@ from views import (
     render_ganancias,
     render_monitor_plays,
 )
+from routes_operations import render_operaciones
 from routes_history import render_historico, register_history_routes
 from routes_jobs import register_job_routes
 from routes_teams import register_team_routes
@@ -26,7 +27,10 @@ def home():
         conn = get_conn()
         cur = conn.cursor()
 
-        if view == "monitor":
+        if view == "operaciones":
+            body = render_operaciones(cur)
+            title = "Centro operacional"
+        elif view == "monitor":
             body = render_monitor(cur)
             title = "Monitoreo operativo"
         elif view == "historico":
