@@ -69,6 +69,7 @@ def nav_link(label, view, current):
 def base_page(title, view, body):
     nav = (
         nav_link("Ejecutivo", "ejecutivo", view)
+        + nav_link("Operaciones", "operaciones", view)
         + nav_link("Monitor", "monitor", view)
         + nav_link("Histórico Last.fm", "historico", view)
         + nav_link("Análisis", "analisis", view)
