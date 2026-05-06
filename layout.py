@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from utils import current_filters
 from styles import BASE_CSS
 
@@ -66,6 +68,18 @@ def nav_link(label, view, current):
     return f'<a class="nav-link {active}" href="/{filter_query(view)}">{label}</a>'
 
 
+def system_banner():
+    updated_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    return f"""
+    <div class="card" style="margin-bottom:18px; padding:14px 18px;">
+        <div class="mini-row" style="border-bottom:0; padding:0;">
+            <span><strong class="green">● Sistema operativo</strong></span>
+            <span class="muted">Última actualización visual: <strong>{updated_at}</strong></span>
+        </div>
+    </div>
+    """
+
+
 def base_page(title, view, body):
     nav = (
         nav_link("Ejecutivo", "ejecutivo", view)
@@ -106,6 +120,7 @@ def base_page(title, view, body):
 <div class='subtitle'>{title}</div>
 <div class='nav'>{nav}</div>
 {tools}
+{system_banner()}
 {body}
 </div>
 </body>
