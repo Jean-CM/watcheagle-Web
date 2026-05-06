@@ -18,11 +18,19 @@ from config import APP_PORT
 
 app = Flask(__name__)
 
+# Se inicializa una sola vez al arrancar el servicio.
+# No debe correr en cada request porque crea/valida tablas e índices y pone lento el dashboard.
+try:
+    init_db()
+except Exception as e:
+    print(f"[WARN] init_db startup failed: {e}")
+
 
 @app.route("/")
 def home():
+    conn = None
+    cur = None
     try:
-        init_db()
         view = (request.args.get("view") or "ejecutivo").strip().lower()
         conn = get_conn()
         cur = conn.cursor()
@@ -50,11 +58,16 @@ def home():
             body = render_ejecutivo(cur)
             title = "Tablero ejecutivo"
 
-        cur.close()
-        conn.close()
         return base_page(title, view, body)
+
     except Exception as e:
         return f"<pre>ERROR EN HOME:\n{str(e)}</pre>", 500
+
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 register_job_routes(app)
@@ -64,5 +77,4 @@ register_history_routes(app)
 
 
 if __name__ == "__main__":
-    init_db()
     app.run(host="0.0.0.0", port=APP_PORT)
