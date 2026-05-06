@@ -1,0 +1,64 @@
+from flask import Flask, request
+
+from helpers import get_conn, init_db
+from layout import base_page
+from views import (
+    render_ejecutivo,
+    render_monitor,
+    render_analisis,
+    render_ganancias,
+    render_monitor_plays,
+)
+from routes_history import render_historico, register_history_routes
+from routes_jobs import register_job_routes
+from routes_teams import register_team_routes
+from routes_init import register_init_routes
+from config import APP_PORT
+
+app = Flask(__name__)
+
+
+@app.route("/")
+def home():
+    try:
+        init_db()
+        view = (request.args.get("view") or "ejecutivo").strip().lower()
+        conn = get_conn()
+        cur = conn.cursor()
+
+        if view == "monitor":
+            body = render_monitor(cur)
+            title = "Monitoreo operativo"
+        elif view == "historico":
+            body = render_historico(cur)
+            title = "Control histórico Last.fm"
+        elif view == "analisis":
+            body = render_analisis(cur)
+            title = "Vista analítica pro"
+        elif view == "ganancias":
+            body = render_ganancias(cur)
+            title = "Vista de ganancias pro"
+        elif view == "monitor-plays":
+            body = render_monitor_plays(cur)
+            title = "Seguimiento de canciones debajo de 1000"
+        else:
+            view = "ejecutivo"
+            body = render_ejecutivo(cur)
+            title = "Tablero ejecutivo"
+
+        cur.close()
+        conn.close()
+        return base_page(title, view, body)
+    except Exception as e:
+        return f"<pre>ERROR EN HOME:\n{str(e)}</pre>", 500
+
+
+register_job_routes(app)
+register_team_routes(app)
+register_init_routes(app)
+register_history_routes(app)
+
+
+if __name__ == "__main__":
+    init_db()
+    app.run(host="0.0.0.0", port=APP_PORT)
