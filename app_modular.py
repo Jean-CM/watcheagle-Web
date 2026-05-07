@@ -6,12 +6,12 @@ from flask import Flask, request
 from helpers import get_conn, init_db
 from layout import base_page
 from views import (
-    render_ejecutivo,
     render_monitor,
     render_analisis,
     render_ganancias,
     render_monitor_plays,
 )
+from routes_executive import render_ejecutivo_fast
 from routes_operations import render_operaciones
 from routes_history import render_historico, register_history_routes
 from routes_jobs import register_job_routes
@@ -21,8 +21,6 @@ from config import APP_PORT
 
 app = Flask(__name__)
 
-# Cache simple en memoria por instancia Render.
-# Baja presión a Postgres en vistas pesadas. Se invalida por tiempo.
 VIEW_CACHE = {}
 CACHE_TTL_SECONDS = 90
 
@@ -38,7 +36,6 @@ def cache_key_for_request(view):
 
 
 def is_cacheable(view):
-    # Monitor e histórico deben sentirse frescos; las demás pueden cachearse brevemente.
     return view in {"ejecutivo", "operaciones", "analisis", "ganancias", "monitor-plays"}
 
 
@@ -62,7 +59,7 @@ def render_with_db(view):
         if view == "monitor-plays":
             return "Seguimiento de canciones debajo de 1000", render_monitor_plays(cur), view
 
-        return "Tablero ejecutivo", render_ejecutivo(cur), "ejecutivo"
+        return "Tablero ejecutivo", render_ejecutivo_fast(cur), "ejecutivo"
 
     finally:
         if cur:
