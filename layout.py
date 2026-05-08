@@ -1,13 +1,17 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from utils import current_filters
 from styles import BASE_CSS
 
 
 def filter_query(view):
-    month, platform, distributor = current_filters()
+    date_from, date_to, month, platform, distributor = current_filters()
     q = f"?view={view}"
-    if month:
+    if date_from:
+        q += f"&date_from={date_from}"
+    if date_to:
+        q += f"&date_to={date_to}"
+    if month and not (date_from or date_to):
         q += f"&month={month}"
     if platform:
         q += f"&platform={platform}"
@@ -16,14 +20,23 @@ def filter_query(view):
     return q
 
 
+def default_dates(date_from, date_to):
+    if date_from and date_to:
+        return date_from, date_to
+    today = datetime.utcnow().date()
+    return str(today - timedelta(days=30)), str(today)
+
+
 def filter_form(view):
-    month, platform, distributor = current_filters()
+    date_from, date_to, month, platform, distributor = current_filters()
+    date_from_value, date_to_value = default_dates(date_from, date_to)
     return f"""
     <div class="card" style="margin-bottom:18px;">
         <div class="section-title">Filtros</div>
         <form class="form-grid" method="GET" action="/">
             <input type="hidden" name="view" value="{view}">
-            <div class="field"><label>Mes</label><input type="month" name="month" value="{month}"></div>
+            <div class="field"><label>Desde</label><input type="date" name="date_from" value="{date_from_value}"></div>
+            <div class="field"><label>Hasta</label><input type="date" name="date_to" value="{date_to_value}"></div>
             <div class="field"><label>Plataforma</label>
                 <select name="platform">
                     <option value="" {"selected" if not platform else ""}>Todas</option>
@@ -74,7 +87,7 @@ def system_banner():
     <div class="card" style="margin-bottom:18px; padding:14px 18px;">
         <div class="mini-row" style="border-bottom:0; padding:0;">
             <span><strong class="green">● Sistema operativo</strong></span>
-            <span class="muted">Última actualización visual: <strong>{updated_at}</strong></span>
+            <span class="muted">Última actualización visual: <strong>{updated_at}</strong> · __LOAD_TIME__ · __CACHE_STATUS__</span>
         </div>
     </div>
     """
@@ -102,7 +115,9 @@ def base_page(title, view, body):
         <a class="tool-link" href="/scrobbles-count">scrobbles-count</a>
         <a class="tool-link" href="/healthz">healthz</a>
         <a class="tool-link" href="/init-artist-metadata">init distribuidoras</a>
+        <a class="tool-link" href="/init-performance-indexes">init performance</a>
         <a class="tool-link" href="/init-lastfm-history-table">init histórico</a>
+        <a class="tool-link" href="/cache-clear">limpiar cache</a>
     </div>
     """
 
