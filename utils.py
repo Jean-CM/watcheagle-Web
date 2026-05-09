@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import request
 from config import PLATFORM_RATES
 
@@ -30,34 +30,10 @@ def parse_ts(ts):
 
 
 def current_filters():
-    date_from = (request.args.get("date_from") or "").strip()
-    date_to = (request.args.get("date_to") or "").strip()
     month = (request.args.get("month") or "").strip()
     platform = (request.args.get("platform") or "").strip().lower()
     distributor = (request.args.get("distributor") or "").strip()
-    return date_from, date_to, month, platform, distributor
-
-
-def date_range():
-    date_from, date_to, month, _, _ = current_filters()
-
-    if date_from and date_to:
-        start = datetime.strptime(date_from, "%Y-%m-%d")
-        end = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
-        return start, end
-
-    if month:
-        start = datetime.strptime(month, "%Y-%m")
-        if start.month == 12:
-            end = datetime(start.year + 1, 1, 1)
-        else:
-            end = datetime(start.year, start.month + 1, 1)
-        return start, end
-
-    today = datetime.utcnow().date()
-    start = datetime.combine(today - timedelta(days=30), datetime.min.time())
-    end = datetime.combine(today + timedelta(days=1), datetime.min.time())
-    return start, end
+    return month, platform, distributor
 
 
 def month_range(month):
