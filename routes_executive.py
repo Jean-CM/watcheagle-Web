@@ -14,10 +14,13 @@ def platform_rate(platform):
 def pct_change(current, previous):
     current = float(current or 0)
     previous = float(previous or 0)
+
     if previous == 0 and current == 0:
         return '0% vs base'
+
     if previous == 0:
         return '+100% vs base'
+
     pct = ((current - previous) / previous) * 100
     sign = '+' if pct >= 0 else ''
     return f'{sign}{pct:.1f}%'
@@ -36,7 +39,9 @@ def metric_card(label, value, compare_label, compare_value, color='blue'):
         <div class="label">{label}</div>
         <div class="value {color}">{value}</div>
         <div class="muted" style="margin-top:8px; font-size:13px;">
-            <span class="{trend_class(compare_value[0], compare_value[1])}">{compare_label}: {pct_change(compare_value[0], compare_value[1])}</span>
+            <span class="{trend_class(compare_value[0], compare_value[1])}">
+                {compare_label}: {pct_change(compare_value[0], compare_value[1])}
+            </span>
         </div>
     </div>
     '''
@@ -44,6 +49,7 @@ def metric_card(label, value, compare_label, compare_value, color='blue'):
 
 def build_extra_filters(alias='s'):
     _, platform, distributor = current_filters()
+
     clauses = []
     params = []
 
@@ -77,6 +83,7 @@ def render_ejecutivo_fast(cur):
         prev_month_start = month_start.replace(month=month_start.month - 1)
 
     extra_clauses, extra_params = build_extra_filters('s')
+
     extra_sql = ''
     if extra_clauses:
         extra_sql = ' AND ' + ' AND '.join(extra_clauses)
@@ -117,10 +124,13 @@ def render_ejecutivo_fast(cur):
 
     for r in rows:
         periodo = r['periodo']
+
         if periodo not in metrics:
             continue
+
         plays = safe_int(r['plays'])
         gain = plays * platform_rate(r['platform'])
+
         metrics[periodo]['plays'] += plays
         metrics[periodo]['gain'] += gain
 
@@ -128,7 +138,9 @@ def render_ejecutivo_fast(cur):
     teams = cur.fetchone()
 
     cur.execute(f'''
-        SELECT s.artist_name, COUNT(*) AS plays
+        SELECT
+            s.artist_name,
+            COUNT(*) AS plays
         FROM scrobbles s
         WHERE s.scrobble_time >= %s
           AND s.scrobble_time < %s
@@ -137,27 +149,31 @@ def render_ejecutivo_fast(cur):
         ORDER BY plays DESC
         LIMIT 8
     ''', [month_start, tomorrow, *extra_params])
+
     artists = cur.fetchall()
 
     artist_html = ''.join([
-    f"""
-    <tr>
-        <td>{r['artist_name']}</td>
-        <td>{safe_int(r['plays']):,}</td>
-        <td class='green'>{money(safe_int(r['plays']) * 0.0054)}</td>
-    </tr>
-    """
-    for r in artists
-]) or """
-<tr>
-    <td colspan='3' class='muted'>Sin datos</td>
-</tr>
-"""
+        f'''
+        <tr>
+            <td>{r['artist_name']}</td>
+            <td>{safe_int(r['plays']):,}</td>
+            <td class="green">{money(safe_int(r['plays']) * 0.0054)}</td>
+        </tr>
+        '''
+        for r in artists
+    ]) or '''
+        <tr>
+            <td colspan="3" class="muted">Sin datos</td>
+        </tr>
+    '''
 
     cur.execute(f'''
-        SELECT COALESCE(am.distributor, 'Sin distribuidora') AS distributor, COUNT(*) AS plays
+        SELECT
+            COALESCE(am.distributor, 'Sin distribuidora') AS distributor,
+            COUNT(*) AS plays
         FROM scrobbles s
-        LEFT JOIN artist_metadata am ON LOWER(am.artist_name) = LOWER(s.artist_name)
+        LEFT JOIN artist_metadata am
+            ON LOWER(am.artist_name) = LOWER(s.artist_name)
         WHERE s.scrobble_time >= %s
           AND s.scrobble_time < %s
           {extra_sql}
@@ -165,22 +181,23 @@ def render_ejecutivo_fast(cur):
         ORDER BY plays DESC
         LIMIT 8
     ''', [month_start, tomorrow, *extra_params])
+
     dist = cur.fetchall()
 
-   dist_html = ''.join([
-    f"""
-    <tr>
-        <td>{r['distributor']}</td>
-        <td>{safe_int(r['plays']):,}</td>
-        <td class='green'>{money(safe_int(r['plays']) * 0.0054)}</td>
-    </tr>
-    """
-    for r in dist
-]) or """
-<tr>
-    <td colspan='3' class='muted'>Sin datos</td>
-</tr>
-"""
+    dist_html = ''.join([
+        f'''
+        <tr>
+            <td>{r['distributor']}</td>
+            <td>{safe_int(r['plays']):,}</td>
+            <td class="green">{money(safe_int(r['plays']) * 0.0054)}</td>
+        </tr>
+        '''
+        for r in dist
+    ]) or '''
+        <tr>
+            <td colspan="3" class="muted">Sin datos</td>
+        </tr>
+    '''
 
     h = metrics['hoy']
     a = metrics['ayer']
@@ -198,54 +215,91 @@ def render_ejecutivo_fast(cur):
     </div>
 
     <div class="grid-3">
-        <div class="card"><div class="label">Plays ayer</div><div class="value muted">{a['plays']:,}</div></div>
-        <div class="card"><div class="label">Ganancia ayer</div><div class="value muted">{money(a['gain'])}</div></div>
-        <div class="card"><div class="label">Equipos activos</div><div class="value yellow">{safe_int(teams['total'])}</div></div>
+        <div class="card">
+            <div class="label">Plays ayer</div>
+            <div class="value muted">{a['plays']:,}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Ganancia ayer</div>
+            <div class="value muted">{money(a['gain'])}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Equipos activos</div>
+            <div class="value yellow">{safe_int(teams['total'])}</div>
+        </div>
     </div>
 
     <div class="grid-2">
 
-    <div class="card">
-        <div class="section-title">Artistas del mes</div>
+        <div class="card">
+            <div class="section-title">Artistas del mes</div>
 
-        <table>
-            <thead>
-                <tr>
-                    <th>Artista</th>
-                    <th>Reproducciones</th>
-                    <th>Ganancia</th>
-                </tr>
-            </thead>
-            <tbody>
-                {artist_html}
-            </tbody>
-        </table>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Artista</th>
+                        <th>Reproducciones</th>
+                        <th>Ganancia</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {artist_html}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <div class="section-title">Distribuidoras del mes</div>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Distribuidora</th>
+                        <th>Reproducciones</th>
+                        <th>Ganancia</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {dist_html}
+                </tbody>
+            </table>
+        </div>
+
     </div>
-
-    <div class="card">
-        <div class="section-title">Distribuidoras del mes</div>
-
-        <table>
-            <thead>
-                <tr>
-                    <th>Distribuidora</th>
-                    <th>Reproducciones</th>
-                    <th>Ganancia</th>
-                </tr>
-            </thead>
-            <tbody>
-                {dist_html}
-            </tbody>
-        </table>
-    </div>
-
-</div>
 
     <div class="card" style="margin-bottom:18px;">
         <div class="section-title">Lectura ejecutiva</div>
-        <div class="mini-row"><span>Mes actual vs mes pasado en plays</span><strong class="{trend_class(m['plays'], pm['plays'])}">{pct_change(m['plays'], pm['plays'])}</strong></div>
-        <div class="mini-row"><span>Mes actual vs mes pasado en ganancias</span><strong class="{trend_class(m['gain'], pm['gain'])}">{pct_change(m['gain'], pm['gain'])}</strong></div>
-        <div class="mini-row"><span>Hoy vs ayer en plays</span><strong class="{trend_class(h['plays'], a['plays'])}">{pct_change(h['plays'], a['plays'])}</strong></div>
-        <div class="mini-row"><span>Hoy vs ayer en ganancias</span><strong class="{trend_class(h['gain'], a['gain'])}">{pct_change(h['gain'], a['gain'])}</strong></div>
+
+        <div class="mini-row">
+            <span>Mes actual vs mes pasado en plays</span>
+            <strong class="{trend_class(m['plays'], pm['plays'])}">
+                {pct_change(m['plays'], pm['plays'])}
+            </strong>
+        </div>
+
+        <div class="mini-row">
+            <span>Mes actual vs mes pasado en ganancias</span>
+            <strong class="{trend_class(m['gain'], pm['gain'])}">
+                {pct_change(m['gain'], pm['gain'])}
+            </strong>
+        </div>
+
+        <div class="mini-row">
+            <span>Hoy vs ayer en plays</span>
+            <strong class="{trend_class(h['plays'], a['plays'])}">
+                {pct_change(h['plays'], a['plays'])}
+            </strong>
+        </div>
+
+        <div class="mini-row">
+            <span>Hoy vs ayer en ganancias</span>
+            <strong class="{trend_class(h['gain'], a['gain'])}">
+                {pct_change(h['gain'], a['gain'])}
+            </strong>
+        </div>
     </div>
     '''
