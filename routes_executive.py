@@ -140,9 +140,19 @@ def render_ejecutivo_fast(cur):
     artists = cur.fetchall()
 
     artist_html = ''.join([
-        f"<div class='mini-row'><span>{r['artist_name']}</span><strong>{r['plays']}</strong></div>"
-        for r in artists
-    ]) or '<div class="muted">Sin datos</div>'
+    f"""
+    <tr>
+        <td>{r['artist_name']}</td>
+        <td>{safe_int(r['plays']):,}</td>
+        <td class='green'>{money(safe_int(r['plays']) * 0.0054)}</td>
+    </tr>
+    """
+    for r in artists
+]) or """
+<tr>
+    <td colspan='3' class='muted'>Sin datos</td>
+</tr>
+"""
 
     cur.execute(f'''
         SELECT COALESCE(am.distributor, 'Sin distribuidora') AS distributor, COUNT(*) AS plays
