@@ -76,8 +76,7 @@ def base_page(title, view, body):
         + nav_link("Operaciones", "operaciones", view)
         + nav_link("Monitor", "monitor", view)
         + nav_link("Histórico Last.fm", "historico", view)
-        + nav_link("Análisis", "analisis", view)
-        + nav_link("Ganancias", "ganancias", view)
+        + nav_link("Financiero", "analisis", view)
         + nav_link("Monitor Plays", "monitor-plays", view)
     )
     tools = """
