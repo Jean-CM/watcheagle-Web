@@ -32,7 +32,78 @@ def month_where(alias='s'):
 
 
 def render_ejecutivo(cur):
-    return '<div class="card">Sistema recuperado correctamente.</div>'
+    where, params = month_where('s')
+
+    cur.execute(f'''
+        SELECT artist_name, COUNT(*) plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY artist_name
+        ORDER BY plays DESC
+        LIMIT 8
+    ''', params)
+    artists = cur.fetchall()
+
+    artist_rows = ''
+    for row in artists:
+        plays = safe_int(row['plays'])
+        revenue = plays * 0.0054
+        artist_rows += f'<tr><td>{row["artist_name"]}</td><td>{plays:,}</td><td class="green">${revenue:,.2f}</td></tr>'
+
+    cur.execute(f'''
+        SELECT COALESCE(am.distributor,'Sin distribuidora') distributor, COUNT(*) plays
+        FROM scrobbles s
+        LEFT JOIN artist_metadata am ON LOWER(am.artist_name)=LOWER(s.artist_name)
+        WHERE {where}
+        GROUP BY distributor
+        ORDER BY plays DESC
+        LIMIT 8
+    ''', params)
+    distributors = cur.fetchall()
+
+    distributor_rows = ''
+    for row in distributors:
+        plays = safe_int(row['plays'])
+        revenue = plays * 0.0054
+        distributor_rows += f'<tr><td>{row["distributor"]}</td><td>{plays:,}</td><td class="green">${revenue:,.2f}</td></tr>'
+
+    return f'''
+    {filter_form('ejecutivo')}
+
+    <div class="grid-2" style="margin-top:18px;">
+      <div class="card">
+        <div class="section-title">Artistas del mes</div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Artista</th>
+              <th>Reproducciones</th>
+              <th>Ganancia estimada</th>
+            </tr>
+          </thead>
+          <tbody>
+            {artist_rows}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="section-title">Distribuidoras del mes</div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Distribuidora</th>
+              <th>Reproducciones</th>
+              <th>Ganancia estimada</th>
+            </tr>
+          </thead>
+          <tbody>
+            {distributor_rows}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    '''
 
 
 def render_monitor(cur):
