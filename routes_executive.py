@@ -167,10 +167,20 @@ def render_ejecutivo_fast(cur):
     ''', [month_start, tomorrow, *extra_params])
     dist = cur.fetchall()
 
-    dist_html = ''.join([
-        f"<div class='mini-row'><span>{r['distributor']}</span><strong>{r['plays']}</strong></div>"
-        for r in dist
-    ]) or '<div class="muted">Sin datos</div>'
+   dist_html = ''.join([
+    f"""
+    <tr>
+        <td>{r['distributor']}</td>
+        <td>{safe_int(r['plays']):,}</td>
+        <td class='green'>{money(safe_int(r['plays']) * 0.0054)}</td>
+    </tr>
+    """
+    for r in dist
+]) or """
+<tr>
+    <td colspan='3' class='muted'>Sin datos</td>
+</tr>
+"""
 
     h = metrics['hoy']
     a = metrics['ayer']
@@ -194,9 +204,42 @@ def render_ejecutivo_fast(cur):
     </div>
 
     <div class="grid-2">
-        <div class="card"><div class="section-title">Top artistas del mes</div>{artist_html}</div>
-        <div class="card"><div class="section-title">Distribuidoras del mes</div>{dist_html}</div>
+
+    <div class="card">
+        <div class="section-title">Artistas del mes</div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Artista</th>
+                    <th>Reproducciones</th>
+                    <th>Ganancia</th>
+                </tr>
+            </thead>
+            <tbody>
+                {artist_html}
+            </tbody>
+        </table>
     </div>
+
+    <div class="card">
+        <div class="section-title">Distribuidoras del mes</div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Distribuidora</th>
+                    <th>Reproducciones</th>
+                    <th>Ganancia</th>
+                </tr>
+            </thead>
+            <tbody>
+                {dist_html}
+            </tbody>
+        </table>
+    </div>
+
+</div>
 
     <div class="card" style="margin-bottom:18px;">
         <div class="section-title">Lectura ejecutiva</div>
