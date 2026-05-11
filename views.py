@@ -115,41 +115,36 @@ def render_monitor(cur):
     '''
 
 
-def render_analisis(cur):
+def render_analisis_financiero(cur, view_name='analisis'):
     where, params = month_where('s')
 
     cur.execute(f'SELECT COUNT(*) c FROM scrobbles s WHERE {where}', params)
-    plays_month = safe_int(cur.fetchone()['c'])
+    plays_total = safe_int(cur.fetchone()['c'])
 
     cur.execute(f'''
-        SELECT DATE(s.scrobble_time) AS play_day, COUNT(*) AS plays
+        SELECT DATE(s.scrobble_time) AS play_day,
+               LOWER(s.app_name) AS platform,
+               COUNT(*) AS plays
         FROM scrobbles s
         WHERE {where}
-        GROUP BY DATE(s.scrobble_time)
+        GROUP BY DATE(s.scrobble_time), LOWER(s.app_name)
         ORDER BY play_day ASC
     ''', params)
-    daily = cur.fetchall()
+    daily_platform = cur.fetchall()
 
-    labels = [str(r['play_day'])[5:] for r in daily]
-    values = [safe_int(r['plays']) for r in daily]
-    avg_daily = round(plays_month / max(len(daily), 1), 2)
+    daily_map = {}
+    daily_gain_map = {}
+    for r in daily_platform:
+        day = str(r['play_day'])[5:]
+        plays = safe_int(r['plays'])
+        gain = plays * avg_rate(r['platform'])
+        daily_map[day] = daily_map.get(day, 0) + plays
+        daily_gain_map[day] = daily_gain_map.get(day, 0) + gain
 
-    return f'''
-    {filter_form('analisis')}
-    <div class="grid-3">
-        <div class="card"><div class="label">Plays filtrados</div><div class="value blue">{plays_month:,}</div></div>
-        <div class="card"><div class="label">Días con data</div><div class="value">{len(daily)}</div></div>
-        <div class="card"><div class="label">Promedio diario</div><div class="value green">{avg_daily:,}</div></div>
-    </div>
-    <div class="card"><div class="section-title">Reproducciones diarias</div><canvas id="playsChart"></canvas></div>
-    <script>
-    new Chart(document.getElementById('playsChart'), {{type:'line',data:{{labels:{json.dumps(labels)},datasets:[{{label:'Reproducciones',data:{json.dumps(values)},borderColor:'#60a5fa',backgroundColor:'rgba(96,165,250,.15)',tension:.35,fill:true}}]}},options:{{responsive:true,plugins:{{legend:{{labels:{{color:'#e5e7eb'}}}}}},scales:{{x:{{ticks:{{color:'#94a3b8'}}}},y:{{ticks:{{color:'#94a3b8'}}}}}}}}}});
-    </script>
-    '''
-
-
-def render_ganancias(cur):
-    where, params = month_where('s')
+    labels = list(daily_map.keys())
+    plays_values = [daily_map[d] for d in labels]
+    gain_values = [round(daily_gain_map.get(d, 0), 2) for d in labels]
+    avg_daily = round(plays_total / max(len(labels), 1), 2)
 
     cur.execute(f'''
         SELECT LOWER(s.app_name) AS platform, COUNT(*) AS plays
@@ -162,8 +157,7 @@ def render_ganancias(cur):
 
     total_min = 0
     total_max = 0
-    rows = ''
-
+    platform_rows = ''
     for r in platforms:
         p = (r['platform'] or 'spotify').lower()
         plays = safe_int(r['plays'])
@@ -173,23 +167,95 @@ def render_ganancias(cur):
         avg = (mn + mx) / 2
         total_min += mn
         total_max += mx
-        rows += f'<tr><td>{p.title()}</td><td>{plays:,}</td><td>{money(mn)}</td><td>{money(mx)}</td><td class="green">{money(avg)}</td></tr>'
+        platform_rows += f'<tr><td>{p.title()}</td><td>{plays:,}</td><td>{money(mn)}</td><td>{money(mx)}</td><td class="green">{money(avg)}</td></tr>'
 
-    if not rows:
-        rows = '<tr><td colspan="5" class="muted">Sin datos</td></tr>'
+    if not platform_rows:
+        platform_rows = '<tr><td colspan="5" class="muted">Sin datos</td></tr>'
+
+    cur.execute(f'''
+        SELECT COALESCE(am.distributor, 'Sin distribuidora') AS distributor,
+               COUNT(*) AS plays
+        FROM scrobbles s
+        LEFT JOIN artist_metadata am ON LOWER(am.artist_name) = LOWER(s.artist_name)
+        WHERE {where}
+        GROUP BY COALESCE(am.distributor, 'Sin distribuidora')
+        ORDER BY plays DESC
+        LIMIT 10
+    ''', params)
+    distributors = cur.fetchall()
+
+    dist_rows = ''
+    for r in distributors:
+        plays = safe_int(r['plays'])
+        gain = plays * 0.0054
+        dist_rows += f'<tr><td>{r["distributor"]}</td><td>{plays:,}</td><td class="green">{money(gain)}</td></tr>'
+    if not dist_rows:
+        dist_rows = '<tr><td colspan="3" class="muted">Sin datos</td></tr>'
+
+    cur.execute(f'''
+        SELECT s.artist_name, s.track_name, COUNT(*) AS plays
+        FROM scrobbles s
+        WHERE {where}
+        GROUP BY s.artist_name, s.track_name
+        ORDER BY plays DESC
+        LIMIT 10
+    ''', params)
+    tracks = cur.fetchall()
+
+    track_rows = ''
+    for r in tracks:
+        plays = safe_int(r['plays'])
+        gain = plays * 0.0054
+        track_rows += f'<tr><td>{r["artist_name"]}</td><td>{r["track_name"]}</td><td>{plays:,}</td><td class="green">{money(gain)}</td></tr>'
+    if not track_rows:
+        track_rows = '<tr><td colspan="4" class="muted">Sin datos</td></tr>'
+
+    total_avg = (total_min + total_max) / 2
 
     return f'''
-    {filter_form('ganancias')}
+    {filter_form(view_name)}
+
+    <div class="grid">
+        <div class="card"><div class="label">Plays filtrados</div><div class="value blue">{plays_total:,}</div></div>
+        <div class="card"><div class="label">Días con data</div><div class="value">{len(labels)}</div></div>
+        <div class="card"><div class="label">Promedio diario</div><div class="value green">{avg_daily:,}</div></div>
+        <div class="card"><div class="label">Ganancia promedio</div><div class="value green">{money(total_avg)}</div></div>
+    </div>
+
     <div class="grid-3">
         <div class="card"><div class="label">Mínimo estimado</div><div class="value">{money(total_min)}</div></div>
         <div class="card"><div class="label">Máximo estimado</div><div class="value yellow">{money(total_max)}</div></div>
-        <div class="card"><div class="label">Promedio estimado</div><div class="value green">{money((total_min + total_max) / 2)}</div></div>
+        <div class="card"><div class="label">Revenue por play promedio</div><div class="value blue">{money(total_avg / max(plays_total, 1))}</div></div>
     </div>
-    <table>
-        <thead><tr><th>Plataforma</th><th>Streams</th><th>Min</th><th>Max</th><th>Promedio</th></tr></thead>
-        <tbody>{rows}</tbody>
-    </table>
+
+    <div class="grid-2">
+        <div class="card"><div class="section-title">Tendencia diaria de plays</div><canvas id="playsChart"></canvas></div>
+        <div class="card"><div class="section-title">Tendencia diaria de ganancias</div><canvas id="gainChart"></canvas></div>
+    </div>
+
+    <div class="grid-2">
+        <div class="card"><div class="section-title">Plataformas</div><table><thead><tr><th>Plataforma</th><th>Streams</th><th>Min</th><th>Max</th><th>Promedio</th></tr></thead><tbody>{platform_rows}</tbody></table></div>
+        <div class="card"><div class="section-title">Distribuidoras</div><table><thead><tr><th>Distribuidora</th><th>Plays</th><th>Ganancia</th></tr></thead><tbody>{dist_rows}</tbody></table></div>
+    </div>
+
+    <div class="card">
+        <div class="section-title">Top canciones con revenue</div>
+        <table><thead><tr><th>Artista</th><th>Canción</th><th>Plays</th><th>Ganancia</th></tr></thead><tbody>{track_rows}</tbody></table>
+    </div>
+
+    <script>
+    new Chart(document.getElementById('playsChart'), {{type:'line',data:{{labels:{json.dumps(labels)},datasets:[{{label:'Plays',data:{json.dumps(plays_values)},borderColor:'#60a5fa',backgroundColor:'rgba(96,165,250,.15)',tension:.35,fill:true}}]}},options:{{responsive:true,plugins:{{legend:{{labels:{{color:'#e5e7eb'}}}}}},scales:{{x:{{ticks:{{color:'#94a3b8'}}}},y:{{ticks:{{color:'#94a3b8'}}}}}}}}}});
+    new Chart(document.getElementById('gainChart'), {{type:'line',data:{{labels:{json.dumps(labels)},datasets:[{{label:'Ganancias',data:{json.dumps(gain_values)},borderColor:'#34d399',backgroundColor:'rgba(52,211,153,.15)',tension:.35,fill:true}}]}},options:{{responsive:true,plugins:{{legend:{{labels:{{color:'#e5e7eb'}}}}}},scales:{{x:{{ticks:{{color:'#94a3b8'}}}},y:{{ticks:{{color:'#94a3b8'}}}}}}}}}});
+    </script>
     '''
+
+
+def render_analisis(cur):
+    return render_analisis_financiero(cur, 'analisis')
+
+
+def render_ganancias(cur):
+    return render_analisis_financiero(cur, 'ganancias')
 
 
 def render_monitor_plays(cur):
