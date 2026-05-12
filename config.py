@@ -30,6 +30,11 @@ ARTIST_METADATA = [
     ("KRYONEXIS", "Angy", "Symphonic"),
 ]
 
+# Lista blanca para Monitor Plays y export CSV.
+# Solo estos artistas aparecerán en esa vista/descarga.
+# Para agregar/quitar artistas, modifica esta lista y despliega de nuevo.
+MONITOR_PLAYS_ARTISTS = [artist for artist, _, _ in ARTIST_METADATA]
+
 JOB_LOG_DIR = os.getenv("JOB_LOG_DIR", "/tmp/watcheagle_jobs")
 LASTFM_API_KEY = os.getenv("LASTFM_API_KEY", "")
 LASTFM_HISTORY_MARGIN_DAYS = int(os.getenv("LASTFM_HISTORY_MARGIN_DAYS", "3"))
