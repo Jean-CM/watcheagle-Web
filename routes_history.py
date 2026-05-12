@@ -1,8 +1,10 @@
+import csv
+import io
 import os
 import threading
 import requests
 from datetime import datetime
-from flask import jsonify, redirect
+from flask import jsonify, redirect, Response
 
 from helpers import get_conn, init_db
 from config import LASTFM_API_KEY, LASTFM_HISTORY_MARGIN_DAYS, JOB_LOG_DIR
@@ -28,6 +30,33 @@ def ensure_lastfm_history_table(cur):
             checked_at TIMESTAMP DEFAULT NOW()
         )
     ''')
+
+
+def days_between(start, end):
+    if not start or not end:
+        return None
+    try:
+        return max((end.date() - start.date()).days, 0)
+    except Exception:
+        return None
+
+
+def days_since(dt):
+    if not dt:
+        return None
+    try:
+        return max((datetime.utcnow().date() - dt.date()).days, 0)
+    except Exception:
+        return None
+
+
+def coverage_percent(created_at, first_at):
+    if not created_at or not first_at:
+        return '-'
+    gap = days_between(created_at, first_at)
+    age = max((datetime.utcnow().date() - created_at.date()).days, 1)
+    pct = max(100 - ((gap or 0) / age * 100), 0)
+    return f'{pct:.1f}%'
 
 
 def fetch_lastfm_user_created_at(lastfm_user):
@@ -175,6 +204,7 @@ def render_historico(cur):
             SUM(CASE WHEN history_status='FALTA_HISTORICO' THEN 1 ELSE 0 END) faltan,
             SUM(CASE WHEN history_status='SIN_DATA' THEN 1 ELSE 0 END) sin_data,
             SUM(CASE WHEN history_status='ERROR_LASTFM' THEN 1 ELSE 0 END) errores,
+            SUM(total_scrobbles) total_scrobbles,
             MAX(checked_at) last_check
         FROM lastfm_history_status
     ''')
@@ -197,8 +227,14 @@ def render_historico(cur):
     ''')
     rows = cur.fetchall()
 
+    total = safe_int(s['total'])
+    completos = safe_int(s['completos'])
+    coverage = round((completos / total) * 100, 1) if total else 0
+
     table_rows = ''
     for r in rows:
+        missing_days = days_between(r['lastfm_created_at'], r['first_scrobble_at'])
+        idle_days = days_since(r['last_scrobble_at'])
         table_rows += f'''
         <tr>
             <td><input type="checkbox" name="team_ids" value="{r['team_id']}"> {r['team_id']}</td>
@@ -207,39 +243,50 @@ def render_historico(cur):
             <td>{r['lastfm_user']}</td>
             <td>{r['lastfm_created_at'] or '-'}</td>
             <td>{r['first_scrobble_at'] or '-'}</td>
+            <td>{missing_days if missing_days is not None else '-'}</td>
             <td>{r['last_scrobble_at'] or '-'}</td>
-            <td>{safe_int(r['total_scrobbles'])}</td>
+            <td>{idle_days if idle_days is not None else '-'}</td>
+            <td>{safe_int(r['total_scrobbles']):,}</td>
+            <td>{coverage_percent(r['lastfm_created_at'], r['first_scrobble_at'])}</td>
             <td>{badge(r['history_status'])}</td>
             <td>{r['recommendation'] or '-'}</td>
         </tr>
         '''
 
     if not table_rows:
-        table_rows = '<tr><td colspan="10" class="muted">No hay diagnóstico todavía. Ejecuta Actualizar diagnóstico Last.fm.</td></tr>'
+        table_rows = '<tr><td colspan="13" class="muted">No hay diagnóstico todavía. Ejecuta Actualizar diagnóstico Last.fm.</td></tr>'
 
     return f'''
     <div class="grid">
-        <div class="card"><div class="label">Equipos diagnosticados</div><div class="value blue">{safe_int(s['total'])}</div></div>
-        <div class="card"><div class="label">Histórico completo</div><div class="value green">{safe_int(s['completos'])}</div></div>
+        <div class="card"><div class="label">Equipos diagnosticados</div><div class="value blue">{total}</div></div>
+        <div class="card"><div class="label">Histórico completo</div><div class="value green">{completos}</div></div>
         <div class="card"><div class="label">Falta histórico</div><div class="value yellow">{safe_int(s['faltan'])}</div></div>
         <div class="card"><div class="label">Sin data / error</div><div class="value red">{safe_int(s['sin_data']) + safe_int(s['errores'])}</div></div>
     </div>
 
+    <div class="grid-3">
+        <div class="card"><div class="label">Cobertura completa</div><div class="value green">{coverage}%</div></div>
+        <div class="card"><div class="label">Scrobbles diagnosticados</div><div class="value blue">{safe_int(s['total_scrobbles']):,}</div></div>
+        <div class="card"><div class="label">Último diagnóstico</div><div class="value muted" style="font-size:18px;">{s['last_check'] or '-'}</div></div>
+    </div>
+
     <div class="card" style="margin-bottom:18px;">
         <div class="section-title">Control histórico Last.fm</div>
-        <div class="mini-row"><span>Último diagnóstico</span><strong>{s['last_check'] or '-'}</strong></div>
         <div class="mini-row"><span>Regla</span><strong>Cacheado; no consulta Last.fm al abrir la vista</strong></div>
+        <div class="mini-row"><span>Margen aceptado</span><strong>{LASTFM_HISTORY_MARGIN_DAYS} días desde creación</strong></div>
+        <div class="mini-row"><span>Uso recomendado</span><strong>Diagnosticar, seleccionar equipos con falta histórico y ejecutar Collect All</strong></div>
     </div>
 
     <div class="actions" style="margin-bottom:18px;">
         <a class="btn btn-primary" href="/refresh-lastfm-history">Actualizar diagnóstico Last.fm</a>
+        <a class="btn btn-secondary" href="/export-lastfm-history.csv">Descargar CSV histórico</a>
         <a class="btn btn-secondary" href="/job-log?job=lastfm-history">Ver log</a>
     </div>
 
     <form method="POST" action="/collect-all-selected">
         <div style="margin-bottom:12px;"><button class="btn btn-primary" type="submit">Collect All seleccionados</button></div>
         <table>
-            <thead><tr><th>ID</th><th>Equipo</th><th>App</th><th>User</th><th>Creación Last.fm</th><th>Primer scrobble DB</th><th>Último scrobble DB</th><th>Total</th><th>Estado</th><th>Recomendación</th></tr></thead>
+            <thead><tr><th>ID</th><th>Equipo</th><th>App</th><th>User</th><th>Creación Last.fm</th><th>Primer scrobble DB</th><th>Días faltantes</th><th>Último scrobble DB</th><th>Días sin actividad</th><th>Total</th><th>Cobertura</th><th>Estado</th><th>Recomendación</th></tr></thead>
             <tbody>{table_rows}</tbody>
         </table>
     </form>
@@ -262,3 +309,62 @@ def register_history_routes(app):
     def refresh_lastfm_history():
         threading.Thread(target=run_lastfm_history_diagnostic, daemon=True).start()
         return redirect('/job-log?job=lastfm-history')
+
+    @app.route('/export-lastfm-history.csv')
+    def export_lastfm_history_csv():
+        conn = None
+        cur = None
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            ensure_lastfm_history_table(cur)
+            cur.execute('''
+                SELECT team_id, team_name, app_name, lastfm_user, lastfm_created_at,
+                       first_scrobble_at, last_scrobble_at, total_scrobbles,
+                       history_status, recommendation, checked_at, error_message
+                FROM lastfm_history_status
+                ORDER BY team_id ASC
+            ''')
+            rows = cur.fetchall()
+
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow([
+                'team_id', 'team_name', 'app_name', 'lastfm_user', 'lastfm_created_at',
+                'first_scrobble_at', 'missing_days', 'last_scrobble_at', 'inactive_days',
+                'total_scrobbles', 'coverage_percent', 'history_status', 'recommendation',
+                'checked_at', 'error_message'
+            ])
+
+            for r in rows:
+                writer.writerow([
+                    r['team_id'],
+                    r['team_name'],
+                    r['app_name'],
+                    r['lastfm_user'],
+                    r['lastfm_created_at'],
+                    r['first_scrobble_at'],
+                    days_between(r['lastfm_created_at'], r['first_scrobble_at']),
+                    r['last_scrobble_at'],
+                    days_since(r['last_scrobble_at']),
+                    safe_int(r['total_scrobbles']),
+                    coverage_percent(r['lastfm_created_at'], r['first_scrobble_at']),
+                    r['history_status'],
+                    r['recommendation'],
+                    r['checked_at'],
+                    r['error_message'],
+                ])
+
+            filename = f"watcheagle_lastfm_history_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+            return Response(
+                output.getvalue(),
+                mimetype='text/csv',
+                headers={'Content-Disposition': f'attachment; filename={filename}'}
+            )
+        except Exception as e:
+            return f"<pre>ERROR EXPORTANDO HISTÓRICO:\n{str(e)}</pre>", 500
+        finally:
+            if cur:
+                cur.close()
+            if conn:
+                conn.close()
