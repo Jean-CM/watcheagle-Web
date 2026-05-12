@@ -1,7 +1,9 @@
+import csv
+import io
 import time
 from datetime import datetime, timedelta
 
-from flask import Flask, request
+from flask import Flask, request, Response
 
 from helpers import get_conn, init_db
 from layout import base_page
@@ -9,6 +11,8 @@ from views import (
     render_monitor,
     render_analisis,
     render_monitor_plays,
+    month_where,
+    avg_rate,
 )
 from routes_executive import render_ejecutivo_fast
 from routes_operations import render_operaciones
@@ -92,6 +96,93 @@ def home():
 
     except Exception as e:
         return f"<pre>ERROR EN HOME:\n{str(e)}</pre>", 500
+
+
+@app.route("/export-monitor-plays.csv")
+def export_monitor_plays_csv():
+    conn = None
+    cur = None
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        where, params = month_where('s')
+
+        cur.execute(f'''
+            SELECT
+                s.artist_name,
+                s.track_name,
+                LOWER(COALESCE(s.app_name, 'spotify')) AS platform,
+                COUNT(*) AS plays,
+                MAX(s.scrobble_time) AS last_play_at
+            FROM scrobbles s
+            WHERE {where}
+            GROUP BY s.artist_name, s.track_name, LOWER(COALESCE(s.app_name, 'spotify'))
+            ORDER BY plays ASC, s.artist_name ASC, s.track_name ASC
+        ''', params)
+        rows = cur.fetchall()
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            'artist_name',
+            'track_name',
+            'platform',
+            'plays',
+            'missing_to_1000',
+            'progress_percent',
+            'estimated_revenue',
+            'priority',
+            'recommendation',
+            'last_play_at',
+        ])
+
+        for r in rows:
+            plays = safe_int(r['plays']) if 'safe_int' in globals() else int(r['plays'] or 0)
+            missing = max(1000 - plays, 0)
+            progress = min(round((plays / 1000) * 100, 1), 100)
+            revenue = round(plays * avg_rate(r['platform']), 4)
+
+            if plays >= 1000:
+                priority = 'COMPLETA'
+                recommendation = 'Mantener rotación'
+            elif plays >= 900:
+                priority = 'CERCA'
+                recommendation = 'Empujar cierre a 1K'
+            elif plays >= 500:
+                priority = 'MEDIA'
+                recommendation = 'Mantener rotación y subir frecuencia'
+            else:
+                priority = 'ALTA'
+                recommendation = 'Prioridad de empuje para playlist'
+
+            writer.writerow([
+                r['artist_name'],
+                r['track_name'],
+                r['platform'],
+                plays,
+                missing,
+                progress,
+                revenue,
+                priority,
+                recommendation,
+                r['last_play_at'],
+            ])
+
+        csv_data = output.getvalue()
+        filename = f"watcheagle_monitor_plays_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+        return Response(
+            csv_data,
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename={filename}'}
+        )
+
+    except Exception as e:
+        return f"<pre>ERROR EXPORTANDO CSV:\n{str(e)}</pre>", 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 @app.route("/cache-clear")
