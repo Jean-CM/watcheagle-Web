@@ -49,7 +49,7 @@ def filter_form(view):
 
 def badge(status):
     s = (status or "PENDING").upper()
-    cls = {"OK":"ok","WARN":"warn","INCIDENT":"incident","PENDING":"pending","COMPLETO":"ok","FALTA_HISTORICO":"warn","SIN_DATA":"incident","ERROR_LASTFM":"incident"}.get(s, "pending")
+    cls = {"OK":"ok","WARN":"warn","INCIDENT":"incident","PENDING":"pending","COMPLETO":"ok","FALTA_HISTORICO":"warn","SIN_DATA":"incident","ERROR_LASTFM":"incident","CERCA":"ok","MEDIA":"warn","ALTA":"incident"}.get(s, "pending")
     return f'<span class="badge {cls}">{s}</span>'
 
 
@@ -74,6 +74,7 @@ def base_page(title, view, body):
     nav = (
         nav_link("Ejecutivo", "ejecutivo", view)
         + nav_link("Operaciones", "operaciones", view)
+        + nav_link("Alertas", "alertas", view)
         + nav_link("Monitor", "monitor", view)
         + nav_link("Histórico Last.fm", "historico", view)
         + nav_link("Financiero", "analisis", view)
