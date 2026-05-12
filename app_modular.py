@@ -13,6 +13,7 @@ from views import (
     render_analisis,
     render_monitor_plays,
     month_where,
+    monitor_artist_filter,
     avg_rate,
 )
 from routes_executive import render_ejecutivo_fast
@@ -107,6 +108,9 @@ def export_monitor_plays_csv():
         conn = get_conn()
         cur = conn.cursor()
         where, params = month_where('s')
+        artist_sql, artist_params = monitor_artist_filter('s')
+        where = f'{where} AND {artist_sql}'
+        params = [*params, *artist_params]
 
         cur.execute(f'''
             SELECT
