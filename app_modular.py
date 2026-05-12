@@ -8,7 +8,6 @@ from layout import base_page
 from views import (
     render_monitor,
     render_analisis,
-    render_ganancias,
     render_monitor_plays,
 )
 from routes_executive import render_ejecutivo_fast
@@ -52,10 +51,8 @@ def render_with_db(view):
             return "Monitoreo operativo", render_monitor(cur), view
         if view == "historico":
             return "Control histórico Last.fm", render_historico(cur), view
-        if view == "analisis":
-            return "Análisis financiero", render_analisis(cur), view
-        if view == "ganancias":
-            return "Análisis financiero", render_ganancias(cur), "analisis"
+        if view in {"analisis", "ganancias"}:
+            return "Análisis financiero", render_analisis(cur), "analisis"
         if view == "monitor-plays":
             return "Seguimiento de canciones debajo de 1000", render_monitor_plays(cur), view
 
