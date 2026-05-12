@@ -1,5 +1,6 @@
 import os
 
+from config import MONITOR_PLAYS_ARTISTS
 from helpers import (
     init_db,
     get_active_teams,
@@ -13,10 +14,15 @@ from helpers import (
 )
 
 JOB_NAME = "run-backfill-full-selected"
+ALLOWED_ARTISTS = {a.strip().lower() for a in MONITOR_PLAYS_ARTISTS if a and a.strip()}
 
 
 def log(msg):
     print(msg, flush=True)
+
+
+def is_allowed_artist(name):
+    return (name or '').strip().lower() in ALLOWED_ARTISTS
 
 
 def filter_teams_by_env(teams):
@@ -41,6 +47,7 @@ def main():
     lines = []
     total_inserted = 0
     total_duplicates = 0
+    total_skipped_artists = 0
     errors = 0
 
     teams = get_active_teams()
@@ -48,6 +55,7 @@ def main():
 
     log("===== BACKFILL HISTÓRICO FULL WATCHEAGLE =====")
     log(f"Equipos seleccionados: {len(teams)}")
+    log(f"Artistas permitidos: {len(ALLOWED_ARTISTS)}")
     log(f"BACKFILL_LIMIT: {BACKFILL_LIMIT}")
     log(f"BACKFILL_MAX_PAGES: {BACKFILL_MAX_PAGES}")
     log("Modo: FULL, no se detiene por duplicados")
@@ -56,9 +64,9 @@ def main():
     for team_index, team in enumerate(teams, start=1):
         team_name = team["name"]
         lastfm_user = team["lastfm_user"]
-
         inserted_for_team = 0
         duplicates_for_team = 0
+        skipped_for_team = 0
 
         log("--------------------------------------------------")
         log(f"[START] {team_index}/{len(teams)} | {team_name} | {lastfm_user}")
@@ -70,10 +78,7 @@ def main():
                 data = fetch_recent_tracks(lastfm_user, limit=BACKFILL_LIMIT, page=page)
 
                 if "error" in data:
-                    msg = (
-                        f"[ERROR] Backfill {team_name} | {lastfm_user} | "
-                        f"Last.fm API error {data.get('error')}: {data.get('message')}"
-                    )
+                    msg = f"[ERROR] Backfill {team_name} | {lastfm_user} | Last.fm API error {data.get('error')}: {data.get('message')}"
                     log(msg)
                     lines.append(msg)
                     errors += 1
@@ -91,6 +96,7 @@ def main():
                 page_duplicates = 0
                 page_now_playing = 0
                 page_no_date = 0
+                page_skipped_artists = 0
 
                 for item in tracks:
                     if item.get("now_playing"):
@@ -99,6 +105,12 @@ def main():
 
                     if not item.get("scrobbled_at"):
                         page_no_date += 1
+                        continue
+
+                    if not is_allowed_artist(item.get("artist_name")):
+                        page_skipped_artists += 1
+                        skipped_for_team += 1
+                        total_skipped_artists += 1
                         continue
 
                     if insert_scrobble(team, item):
@@ -113,7 +125,7 @@ def main():
                 msg = (
                     f"[OK PAGE] {team_name} | {lastfm_user} | página={page} | "
                     f"insertados={page_inserted} | duplicados={page_duplicates} | "
-                    f"now_playing={page_now_playing} | sin_fecha={page_no_date}"
+                    f"externos_omitidos={page_skipped_artists} | now_playing={page_now_playing} | sin_fecha={page_no_date}"
                 )
                 log(msg)
                 lines.append(msg)
@@ -122,10 +134,7 @@ def main():
                     log(f"[STOP] {team_name} | fin del histórico disponible.")
                     break
 
-            done = (
-                f"[DONE] {team_name} | {lastfm_user} | "
-                f"insertados={inserted_for_team} | duplicados={duplicates_for_team}"
-            )
+            done = f"[DONE] {team_name} | {lastfm_user} | insertados={inserted_for_team} | duplicados={duplicates_for_team} | externos_omitidos={skipped_for_team}"
             log(done)
             lines.append(done)
 
@@ -139,12 +148,14 @@ def main():
     log("===== RESUMEN BACKFILL FULL =====")
     log(f"Total histórico insertado: {total_inserted}")
     log(f"Total duplicados: {total_duplicates}")
+    log(f"Total artistas externos omitidos: {total_skipped_artists}")
     log(f"Errores: {errors}")
 
     lines.append("")
     lines.append("===== RESUMEN BACKFILL FULL =====")
     lines.append(f"Total histórico insertado: {total_inserted}")
     lines.append(f"Total duplicados: {total_duplicates}")
+    lines.append(f"Total artistas externos omitidos: {total_skipped_artists}")
     lines.append(f"Errores: {errors}")
 
     finish_job(job_id, "OK" if errors == 0 else "ERROR", "\n".join(lines))
