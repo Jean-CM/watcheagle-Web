@@ -190,6 +190,110 @@ def export_monitor_plays_csv():
             conn.close()
 
 
+def non_owned_where(alias='s'):
+    artist_sql, artist_params = monitor_artist_filter(alias)
+    return f'NOT ({artist_sql})', artist_params
+
+
+@app.route("/cleanup-non-owned-scrobbles-preview")
+def cleanup_non_owned_scrobbles_preview():
+    conn = None
+    cur = None
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        where, params = non_owned_where('s')
+
+        cur.execute(f"SELECT COUNT(*) AS total FROM scrobbles s WHERE {where}", params)
+        total = safe_int(cur.fetchone()['total'])
+
+        cur.execute(f"SELECT COUNT(DISTINCT artist_name) AS total FROM scrobbles s WHERE {where}", params)
+        artists = safe_int(cur.fetchone()['total'])
+
+        cur.execute(f'''
+            SELECT artist_name, COUNT(*) AS plays
+            FROM scrobbles s
+            WHERE {where}
+            GROUP BY artist_name
+            ORDER BY plays DESC
+            LIMIT 50
+        ''', params)
+        rows = cur.fetchall()
+
+        table_rows = ''.join([
+            f"<tr><td>{r['artist_name']}</td><td>{safe_int(r['plays']):,}</td></tr>"
+            for r in rows
+        ]) or '<tr><td colspan="2" class="muted">No hay artistas externos.</td></tr>'
+
+        body = f'''
+        <div class="grid-2">
+            <div class="card"><div class="label">Scrobbles externos detectados</div><div class="value red">{total:,}</div></div>
+            <div class="card"><div class="label">Artistas externos</div><div class="value yellow">{artists:,}</div></div>
+        </div>
+        <div class="card" style="margin-bottom:18px;">
+            <div class="section-title">Acción segura</div>
+            <div class="mini-row"><span>Preview</span><strong>Esto todavía NO borra nada</strong></div>
+            <div class="mini-row"><span>Lista blanca</span><strong>MONITOR_PLAYS_ARTISTS</strong></div>
+            <div style="margin-top:14px;">
+                <a class="btn btn-primary" href="/cleanup-non-owned-scrobbles-run?confirm=YES_DELETE_EXTERNALS">Borrar externos confirmados</a>
+            </div>
+        </div>
+        <div class="card">
+            <div class="section-title">Top 50 artistas externos a borrar</div>
+            <table><thead><tr><th>Artista</th><th>Scrobbles</th></tr></thead><tbody>{table_rows}</tbody></table>
+        </div>
+        '''
+        html = base_page('Preview limpieza de scrobbles externos', 'operaciones', body)
+        return html.replace('__LOAD_TIME__', '0.00s').replace('__CACHE_STATUS__', 'No cache')
+
+    except Exception as e:
+        return f"<pre>ERROR PREVIEW CLEANUP:\n{str(e)}</pre>", 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@app.route("/cleanup-non-owned-scrobbles-run")
+def cleanup_non_owned_scrobbles_run():
+    if request.args.get('confirm') != 'YES_DELETE_EXTERNALS':
+        return '<pre>Falta confirm=YES_DELETE_EXTERNALS. No se borró nada.</pre>', 400
+
+    conn = None
+    cur = None
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        where, params = non_owned_where('s')
+
+        cur.execute(f"DELETE FROM scrobbles s WHERE {where}", params)
+        deleted = cur.rowcount
+        conn.commit()
+        VIEW_CACHE.clear()
+
+        body = f'''
+        <div class="card">
+            <div class="section-title">Limpieza completada</div>
+            <div class="mini-row"><span>Scrobbles externos borrados</span><strong class="green">{deleted:,}</strong></div>
+            <div class="mini-row"><span>Cache</span><strong>Limpiada</strong></div>
+            <div style="margin-top:14px;"><a class="btn btn-primary" href="/?view=monitor-plays">Volver a Monitor Plays</a></div>
+        </div>
+        '''
+        html = base_page('Limpieza completada', 'operaciones', body)
+        return html.replace('__LOAD_TIME__', '0.00s').replace('__CACHE_STATUS__', 'No cache')
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return f"<pre>ERROR RUN CLEANUP:\n{str(e)}</pre>", 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
 @app.route("/cache-clear")
 def cache_clear():
     VIEW_CACHE.clear()
