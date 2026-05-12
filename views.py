@@ -1,4 +1,8 @@
 import json
+import math
+from urllib.parse import urlencode
+
+from flask import request
 
 from config import PLATFORM_RATES
 from utils import safe_int, money, current_filters, month_range
@@ -393,6 +397,22 @@ def render_ganancias(cur):
 
 def render_monitor_plays(cur):
     where, params = month_where('s')
+    month, platform, distributor = current_filters()
+    page = max(safe_int(request.args.get('page'), 1), 1)
+    per_page = 50
+    offset = (page - 1) * per_page
+
+    cur.execute(f'''
+        SELECT COUNT(*) AS total_tracks
+        FROM (
+            SELECT s.artist_name, s.track_name
+            FROM scrobbles s
+            WHERE {where}
+            GROUP BY s.artist_name, s.track_name
+            HAVING COUNT(*) < 1000
+        ) x
+    ''', params)
+    total_tracks = safe_int(cur.fetchone()['total_tracks'])
 
     cur.execute(f'''
         SELECT s.artist_name, s.track_name, COUNT(*) AS plays
@@ -400,34 +420,46 @@ def render_monitor_plays(cur):
         WHERE {where}
         GROUP BY s.artist_name, s.track_name
         HAVING COUNT(*) < 1000
-        ORDER BY plays DESC
-        LIMIT 200
-    ''', params)
+        ORDER BY plays DESC, s.artist_name ASC, s.track_name ASC
+        LIMIT %s OFFSET %s
+    ''', [*params, per_page, offset])
     rows = cur.fetchall()
 
-    total_tracks = len(rows)
-    near_goal = 0
-    high_priority = 0
-    total_missing = 0
-    table_rows = ''
+    cur.execute(f'''
+        SELECT
+            SUM(CASE WHEN plays >= 900 THEN 1 ELSE 0 END) AS near_goal,
+            SUM(CASE WHEN plays < 500 THEN 1 ELSE 0 END) AS high_priority,
+            SUM(1000 - plays) AS total_missing
+        FROM (
+            SELECT COUNT(*) AS plays
+            FROM scrobbles s
+            WHERE {where}
+            GROUP BY s.artist_name, s.track_name
+            HAVING COUNT(*) < 1000
+        ) x
+    ''', params)
+    kpi = cur.fetchone()
 
+    near_goal = safe_int(kpi['near_goal'] if kpi else 0)
+    high_priority = safe_int(kpi['high_priority'] if kpi else 0)
+    total_missing = safe_int(kpi['total_missing'] if kpi else 0)
+    total_pages = max(math.ceil(total_tracks / per_page), 1)
+
+    table_rows = ''
     for r in rows:
         plays = safe_int(r['plays'])
         faltan = max(1000 - plays, 0)
         avance = min(round((plays / 1000) * 100, 1), 100)
         gain = plays * 0.0054
-        total_missing += faltan
 
         if plays >= 900:
             prioridad = '<span class="badge ok">CERCA</span>'
-            near_goal += 1
             recomendacion = 'Empujar cierre a 1K'
         elif plays >= 500:
             prioridad = '<span class="badge warn">MEDIA</span>'
             recomendacion = 'Mantener rotación'
         else:
             prioridad = '<span class="badge incident">ALTA</span>'
-            high_priority += 1
             recomendacion = 'Prioridad de empuje'
 
         table_rows += f'''
@@ -446,6 +478,24 @@ def render_monitor_plays(cur):
     if not table_rows:
         table_rows = '<tr><td colspan="8" class="muted">No hay canciones debajo de 1000.</td></tr>'
 
+    base_args = {'view': 'monitor-plays'}
+    if month:
+        base_args['month'] = month
+    if platform:
+        base_args['platform'] = platform
+    if distributor:
+        base_args['distributor'] = distributor
+
+    export_args = dict(base_args)
+    export_link = '/export-monitor-plays.csv?' + urlencode(export_args)
+
+    prev_args = dict(base_args)
+    prev_args['page'] = max(page - 1, 1)
+    next_args = dict(base_args)
+    next_args['page'] = min(page + 1, total_pages)
+    prev_link = '/?' + urlencode(prev_args)
+    next_link = '/?' + urlencode(next_args)
+
     return f'''
     {filter_form('monitor-plays')}
 
@@ -461,6 +511,16 @@ def render_monitor_plays(cur):
         <div class="mini-row"><span>Cerca de meta</span><strong>900 a 999 plays</strong></div>
         <div class="mini-row"><span>Prioridad media</span><strong>500 a 899 plays</strong></div>
         <div class="mini-row"><span>Prioridad alta</span><strong>Menos de 500 plays</strong></div>
+        <div class="mini-row"><span>Descarga para playlist</span><strong><a class="btn btn-primary" href="{export_link}">Descargar canciones CSV</a></strong></div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px;">
+        <div class="mini-row"><span>Página</span><strong>{page} / {total_pages}</strong></div>
+        <div class="mini-row"><span>Mostrando</span><strong>{len(rows)} canciones por página</strong></div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
+            <a class="btn btn-secondary" href="{prev_link}">Anterior</a>
+            <a class="btn btn-secondary" href="{next_link}">Siguiente</a>
+        </div>
     </div>
 
     <div class="section-title">Monitor Plays Pro</div>
