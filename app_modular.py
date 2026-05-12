@@ -7,6 +7,7 @@ from flask import Flask, request, Response
 
 from helpers import get_conn, init_db
 from layout import base_page
+from utils import safe_int
 from views import (
     render_monitor,
     render_analisis,
@@ -137,7 +138,7 @@ def export_monitor_plays_csv():
         ])
 
         for r in rows:
-            plays = safe_int(r['plays']) if 'safe_int' in globals() else int(r['plays'] or 0)
+            plays = safe_int(r['plays'])
             missing = max(1000 - plays, 0)
             progress = min(round((plays / 1000) * 100, 1), 100)
             revenue = round(plays * avg_rate(r['platform']), 4)
