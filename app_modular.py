@@ -18,6 +18,7 @@ from views import (
 )
 from routes_executive import render_ejecutivo_fast
 from routes_operations import render_operaciones
+from routes_alerts import render_alertas
 from routes_history import render_historico, register_history_routes
 from routes_jobs import register_job_routes
 from routes_teams import register_team_routes
@@ -41,7 +42,7 @@ def cache_key_for_request(view):
 
 
 def is_cacheable(view):
-    return view in {"ejecutivo", "operaciones", "analisis", "ganancias", "monitor-plays"}
+    return view in {"ejecutivo", "operaciones", "alertas", "analisis", "ganancias", "monitor-plays"}
 
 
 def render_with_db(view):
@@ -53,6 +54,8 @@ def render_with_db(view):
 
         if view == "operaciones":
             return "Centro operacional", render_operaciones(cur), view
+        if view == "alertas":
+            return "Alertas internas", render_alertas(cur), view
         if view == "monitor":
             return "Monitoreo operativo", render_monitor(cur), view
         if view == "historico":
