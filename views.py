@@ -46,30 +46,90 @@ def render_monitor(cur):
         SELECT COUNT(*) total,
                SUM(CASE WHEN status='OK' THEN 1 ELSE 0 END) ok_count,
                SUM(CASE WHEN status='WARN' THEN 1 ELSE 0 END) warn_count,
-               SUM(CASE WHEN status='INCIDENT' THEN 1 ELSE 0 END) incident_count
+               SUM(CASE WHEN status='INCIDENT' THEN 1 ELSE 0 END) incident_count,
+               SUM(CASE WHEN last_scrobble_at IS NULL THEN 1 ELSE 0 END) sin_data,
+               SUM(CASE WHEN COALESCE(idle_minutes, 999999) >= 60 THEN 1 ELSE 0 END) dormidos
         FROM teams
         WHERE active = TRUE
     ''')
     s = cur.fetchone()
+
+    cur.execute('''
+        SELECT app_name,
+               COUNT(*) AS total,
+               SUM(CASE WHEN status='OK' THEN 1 ELSE 0 END) AS ok_count,
+               SUM(CASE WHEN status='WARN' THEN 1 ELSE 0 END) AS warn_count,
+               SUM(CASE WHEN status='INCIDENT' THEN 1 ELSE 0 END) AS incident_count,
+               SUM(CASE WHEN last_scrobble_at IS NULL THEN 1 ELSE 0 END) AS sin_data,
+               SUM(CASE WHEN COALESCE(idle_minutes, 999999) >= 60 THEN 1 ELSE 0 END) AS dormidos
+        FROM teams
+        WHERE active = TRUE
+        GROUP BY app_name
+        ORDER BY app_name ASC
+    ''')
+    app_summary = cur.fetchall()
+
+    app_rows = ''
+    for r in app_summary:
+        app_rows += f'''
+        <tr>
+            <td>{r['app_name']}</td>
+            <td>{safe_int(r['total'])}</td>
+            <td class="green">{safe_int(r['ok_count'])}</td>
+            <td class="yellow">{safe_int(r['warn_count'])}</td>
+            <td class="red">{safe_int(r['incident_count'])}</td>
+            <td>{safe_int(r['dormidos'])}</td>
+            <td>{safe_int(r['sin_data'])}</td>
+        </tr>
+        '''
+    if not app_rows:
+        app_rows = '<tr><td colspan="7" class="muted">Sin data por app.</td></tr>'
 
     if platform:
         cur.execute('''
             SELECT id, name, app_name, lastfm_user, status, last_scrobble_at, idle_minutes, last_check_at
             FROM teams
             WHERE LOWER(app_name) = %s
-            ORDER BY id ASC
+            ORDER BY
+                CASE
+                    WHEN last_scrobble_at IS NULL THEN 1
+                    WHEN COALESCE(idle_minutes, 999999) >= 180 THEN 2
+                    WHEN COALESCE(idle_minutes, 999999) >= 60 THEN 3
+                    ELSE 4
+                END,
+                COALESCE(idle_minutes, 999999) DESC,
+                id ASC
         ''', (platform,))
     else:
         cur.execute('''
             SELECT id, name, app_name, lastfm_user, status, last_scrobble_at, idle_minutes, last_check_at
             FROM teams
-            ORDER BY id ASC
+            ORDER BY
+                CASE
+                    WHEN last_scrobble_at IS NULL THEN 1
+                    WHEN COALESCE(idle_minutes, 999999) >= 180 THEN 2
+                    WHEN COALESCE(idle_minutes, 999999) >= 60 THEN 3
+                    ELSE 4
+                END,
+                COALESCE(idle_minutes, 999999) DESC,
+                id ASC
         ''')
     teams = cur.fetchall()
 
     rows = ''
+    critical_rows = ''
     for t in teams:
-        rows += f'''
+        idle = t['idle_minutes']
+        if t['last_scrobble_at'] is None:
+            salud = '<span class="badge incident">SIN DATA</span>'
+        elif idle is not None and idle >= 180:
+            salud = '<span class="badge incident">DORMIDO +3H</span>'
+        elif idle is not None and idle >= 60:
+            salud = '<span class="badge warn">DORMIDO +1H</span>'
+        else:
+            salud = '<span class="badge ok">ACTIVO</span>'
+
+        row_html = f'''
         <tr>
             <td><input type="checkbox" name="team_ids" value="{t['id']}"> {t['id']}</td>
             <td>{t['name']}</td>
@@ -77,22 +137,77 @@ def render_monitor(cur):
             <td>{t['lastfm_user']}</td>
             <td>{badge(t['status'])}</td>
             <td>{t['last_scrobble_at'] or '-'}</td>
-            <td>{t['idle_minutes'] if t['idle_minutes'] is not None else '-'}</td>
+            <td>{idle if idle is not None else '-'}</td>
             <td>{t['last_check_at'] or '-'}</td>
+            <td>{salud}</td>
         </tr>
         '''
+        rows += row_html
+
+        if t['last_scrobble_at'] is None or (idle is not None and idle >= 60):
+            critical_rows += row_html
 
     if not rows:
-        rows = '<tr><td colspan="8" class="muted">No hay equipos.</td></tr>'
+        rows = '<tr><td colspan="9" class="muted">No hay equipos.</td></tr>'
+    if not critical_rows:
+        critical_rows = '<tr><td colspan="9" class="muted">Sin alertas críticas. Todo tranquilo por ahora.</td></tr>'
+
+    if platform:
+        cur.execute('''
+            SELECT artist_name, track_name, app_name, lastfm_user, scrobble_time
+            FROM scrobbles
+            WHERE LOWER(app_name) = %s
+            ORDER BY scrobble_time DESC
+            LIMIT 12
+        ''', (platform,))
+    else:
+        cur.execute('''
+            SELECT artist_name, track_name, app_name, lastfm_user, scrobble_time
+            FROM scrobbles
+            ORDER BY scrobble_time DESC
+            LIMIT 12
+        ''')
+    recent = cur.fetchall()
+
+    recent_rows = ''
+    for r in recent:
+        recent_rows += f'''
+        <tr>
+            <td>{r['scrobble_time']}</td>
+            <td>{r['app_name']}</td>
+            <td>{r['lastfm_user']}</td>
+            <td>{r['artist_name']}</td>
+            <td>{r['track_name']}</td>
+        </tr>
+        '''
+    if not recent_rows:
+        recent_rows = '<tr><td colspan="5" class="muted">Sin reproducciones recientes.</td></tr>'
 
     return f'''
     {filter_form('monitor')}
 
     <div class="grid">
-        <div class="card"><div class="label">Monitores activos</div><div class="value">{safe_int(s['total'])}</div></div>
+        <div class="card"><div class="label">Monitores activos</div><div class="value blue">{safe_int(s['total'])}</div></div>
         <div class="card"><div class="label">OK</div><div class="value green">{safe_int(s['ok_count'])}</div></div>
         <div class="card"><div class="label">WARN</div><div class="value yellow">{safe_int(s['warn_count'])}</div></div>
         <div class="card"><div class="label">INCIDENT</div><div class="value red">{safe_int(s['incident_count'])}</div></div>
+    </div>
+
+    <div class="grid-2">
+        <div class="card">
+            <div class="section-title">Resumen por app</div>
+            <table>
+                <thead><tr><th>App</th><th>Total</th><th>OK</th><th>WARN</th><th>INCIDENT</th><th>Dormidos</th><th>Sin data</th></tr></thead>
+                <tbody>{app_rows}</tbody>
+            </table>
+        </div>
+        <div class="card">
+            <div class="section-title">Alertas rápidas</div>
+            <div class="mini-row"><span>Dormidos +60 min</span><strong class="yellow">{safe_int(s['dormidos'])}</strong></div>
+            <div class="mini-row"><span>Sin data</span><strong class="red">{safe_int(s['sin_data'])}</strong></div>
+            <div class="mini-row"><span>Filtro actual app</span><strong>{platform or 'Todas'}</strong></div>
+            <div class="mini-row"><span>Acción recomendada</span><strong>Revisar alertas y correr collect selectivo</strong></div>
+        </div>
     </div>
 
     <div class="card" style="margin-bottom:18px;">
@@ -105,10 +220,28 @@ def render_monitor(cur):
         </form>
     </div>
 
+    <div class="card" style="margin-bottom:18px;">
+        <div class="section-title">Reproducciones recientes</div>
+        <table>
+            <thead><tr><th>Hora</th><th>App</th><th>User</th><th>Artista</th><th>Canción</th></tr></thead>
+            <tbody>{recent_rows}</tbody>
+        </table>
+    </div>
+
     <form method="POST" action="/collect-all-selected">
         <div style="margin-bottom:12px;"><button class="btn btn-primary" type="submit">Collect All seleccionados</button></div>
+
+        <div class="card" style="margin-bottom:18px;">
+            <div class="section-title">Equipos con alerta</div>
+            <table>
+                <thead><tr><th>ID</th><th>Equipo</th><th>App</th><th>User</th><th>Status</th><th>Último scrobble</th><th>Idle</th><th>Último check</th><th>Salud</th></tr></thead>
+                <tbody>{critical_rows}</tbody>
+            </table>
+        </div>
+
+        <div class="section-title">Todos los equipos</div>
         <table>
-            <thead><tr><th>ID</th><th>Equipo</th><th>App</th><th>User</th><th>Status</th><th>Último scrobble</th><th>Idle</th><th>Último check</th></tr></thead>
+            <thead><tr><th>ID</th><th>Equipo</th><th>App</th><th>User</th><th>Status</th><th>Último scrobble</th><th>Idle</th><th>Último check</th><th>Salud</th></tr></thead>
             <tbody>{rows}</tbody>
         </table>
     </form>
