@@ -1,3 +1,4 @@
+from config import MONITOR_PLAYS_ARTISTS
 from helpers import (
     init_db,
     get_active_teams,
@@ -12,10 +13,15 @@ from helpers import (
 )
 
 JOB_NAME = "run-collector"
+ALLOWED_ARTISTS = {a.strip().lower() for a in MONITOR_PLAYS_ARTISTS if a and a.strip()}
 
 
 def log(msg):
     print(msg, flush=True)
+
+
+def is_allowed_artist(name):
+    return (name or '').strip().lower() in ALLOWED_ARTISTS
 
 
 def main():
@@ -24,12 +30,14 @@ def main():
 
     lines = []
     total_inserted = 0
+    total_skipped_artists = 0
     errors = 0
 
     teams = get_active_teams()
 
     log("===== COLLECTOR INCREMENTAL WATCHEAGLE =====")
     log(f"Equipos activos: {len(teams)}")
+    log(f"Artistas permitidos: {len(ALLOWED_ARTISTS)}")
     log(f"COLLECTOR_LIMIT: {COLLECTOR_LIMIT}")
     log(f"COLLECTOR_MAX_PAGES: {COLLECTOR_MAX_PAGES}")
     log("")
@@ -44,22 +52,16 @@ def main():
         try:
             newest = get_latest_scrobble_for_user(lastfm_user)
             inserted_for_team = 0
+            skipped_for_team = 0
             stop_user = False
 
             for page in range(1, COLLECTOR_MAX_PAGES + 1):
                 log(f"[PAGE] {team_name} | {lastfm_user} | página={page}")
 
-                data = fetch_recent_tracks(
-                    lastfm_user,
-                    limit=COLLECTOR_LIMIT,
-                    page=page,
-                )
+                data = fetch_recent_tracks(lastfm_user, limit=COLLECTOR_LIMIT, page=page)
 
                 if "error" in data:
-                    msg = (
-                        f"[ERROR] Collector {team_name} | {lastfm_user} | "
-                        f"Last.fm API error {data.get('error')}: {data.get('message')}"
-                    )
+                    msg = f"[ERROR] Collector {team_name} | {lastfm_user} | Last.fm API error {data.get('error')}: {data.get('message')}"
                     log(msg)
                     lines.append(msg)
                     errors += 1
@@ -78,6 +80,7 @@ def main():
                 page_old = 0
                 page_now_playing = 0
                 page_no_date = 0
+                page_skipped_artists = 0
 
                 for item in tracks:
                     if item.get("now_playing"):
@@ -88,7 +91,12 @@ def main():
                         page_no_date += 1
                         continue
 
-                    # Incremental: si ya llegamos a algo igual o más viejo que lo último guardado, paramos.
+                    if not is_allowed_artist(item.get("artist_name")):
+                        page_skipped_artists += 1
+                        skipped_for_team += 1
+                        total_skipped_artists += 1
+                        continue
+
                     if newest and item["scrobbled_at"] <= newest:
                         page_old += 1
                         stop_user = True
@@ -104,7 +112,8 @@ def main():
                 msg = (
                     f"[OK PAGE] {team_name} | {lastfm_user} | página={page} | "
                     f"insertados={page_inserted} | duplicados={page_duplicates} | "
-                    f"viejos={page_old} | now_playing={page_now_playing} | sin_fecha={page_no_date}"
+                    f"externos_omitidos={page_skipped_artists} | viejos={page_old} | "
+                    f"now_playing={page_now_playing} | sin_fecha={page_no_date}"
                 )
                 log(msg)
                 lines.append(msg)
@@ -114,13 +123,10 @@ def main():
                     break
 
                 if len(tracks) < COLLECTOR_LIMIT:
-                    log(
-                        f"[STOP] {team_name} | {lastfm_user} | página={page} "
-                        f"trajo {len(tracks)} tracks, menor que COLLECTOR_LIMIT."
-                    )
+                    log(f"[STOP] {team_name} | {lastfm_user} | página={page} trajo {len(tracks)} tracks, menor que COLLECTOR_LIMIT.")
                     break
 
-            done = f"[DONE] Collector {team_name} | {lastfm_user} | insertados={inserted_for_team}"
+            done = f"[DONE] Collector {team_name} | {lastfm_user} | insertados={inserted_for_team} | externos_omitidos={skipped_for_team}"
             log(done)
             lines.append(done)
 
@@ -133,11 +139,13 @@ def main():
     log("")
     log("===== RESUMEN COLLECTOR =====")
     log(f"Total scrobbles insertados: {total_inserted}")
+    log(f"Total artistas externos omitidos: {total_skipped_artists}")
     log(f"Errores: {errors}")
 
     lines.append("")
     lines.append("===== RESUMEN COLLECTOR =====")
     lines.append(f"Total scrobbles insertados: {total_inserted}")
+    lines.append(f"Total artistas externos omitidos: {total_skipped_artists}")
     lines.append(f"Errores: {errors}")
 
     finish_job(job_id, "OK" if errors == 0 else "ERROR", "\n".join(lines))
