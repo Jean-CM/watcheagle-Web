@@ -405,20 +405,67 @@ def render_monitor_plays(cur):
     ''', params)
     rows = cur.fetchall()
 
+    total_tracks = len(rows)
+    near_goal = 0
+    high_priority = 0
+    total_missing = 0
     table_rows = ''
+
     for r in rows:
         plays = safe_int(r['plays'])
         faltan = max(1000 - plays, 0)
-        table_rows += f'<tr><td>{r["artist_name"]}</td><td>{r["track_name"]}</td><td>{plays:,}</td><td>{faltan:,}</td><td>Dar {faltan:,} reproducciones</td></tr>'
+        avance = min(round((plays / 1000) * 100, 1), 100)
+        gain = plays * 0.0054
+        total_missing += faltan
+
+        if plays >= 900:
+            prioridad = '<span class="badge ok">CERCA</span>'
+            near_goal += 1
+            recomendacion = 'Empujar cierre a 1K'
+        elif plays >= 500:
+            prioridad = '<span class="badge warn">MEDIA</span>'
+            recomendacion = 'Mantener rotación'
+        else:
+            prioridad = '<span class="badge incident">ALTA</span>'
+            high_priority += 1
+            recomendacion = 'Prioridad de empuje'
+
+        table_rows += f'''
+        <tr>
+            <td>{r['artist_name']}</td>
+            <td>{r['track_name']}</td>
+            <td>{plays:,}</td>
+            <td>{faltan:,}</td>
+            <td>{avance}%</td>
+            <td class="green">{money(gain)}</td>
+            <td>{prioridad}</td>
+            <td>{recomendacion}</td>
+        </tr>
+        '''
 
     if not table_rows:
-        table_rows = '<tr><td colspan="5" class="muted">No hay canciones debajo de 1000.</td></tr>'
+        table_rows = '<tr><td colspan="8" class="muted">No hay canciones debajo de 1000.</td></tr>'
 
     return f'''
     {filter_form('monitor-plays')}
+
+    <div class="grid">
+        <div class="card"><div class="label">Canciones bajo 1K</div><div class="value blue">{total_tracks}</div></div>
+        <div class="card"><div class="label">Cerca de meta</div><div class="value green">{near_goal}</div></div>
+        <div class="card"><div class="label">Prioridad alta</div><div class="value red">{high_priority}</div></div>
+        <div class="card"><div class="label">Reproducciones faltantes</div><div class="value yellow">{total_missing:,}</div></div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px;">
+        <div class="section-title">Lectura de prioridad</div>
+        <div class="mini-row"><span>Cerca de meta</span><strong>900 a 999 plays</strong></div>
+        <div class="mini-row"><span>Prioridad media</span><strong>500 a 899 plays</strong></div>
+        <div class="mini-row"><span>Prioridad alta</span><strong>Menos de 500 plays</strong></div>
+    </div>
+
     <div class="section-title">Monitor Plays Pro</div>
     <table>
-        <thead><tr><th>Artista</th><th>Canción</th><th>Plays</th><th>Faltan 1K</th><th>Recomendación</th></tr></thead>
+        <thead><tr><th>Artista</th><th>Canción</th><th>Plays</th><th>Faltan 1K</th><th>Avance</th><th>Ganancia</th><th>Prioridad</th><th>Recomendación</th></tr></thead>
         <tbody>{table_rows}</tbody>
     </table>
     '''
