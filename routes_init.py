@@ -14,6 +14,13 @@ def register_init_routes(app):
     except Exception as e:
         print(f"[WARN] spotify mapping routes not registered: {e}")
 
+    try:
+        from layout import base_page
+        from routes_spotify_auto_map import register_spotify_auto_map_routes
+        register_spotify_auto_map_routes(app, get_conn, base_page)
+    except Exception as e:
+        print(f"[WARN] spotify auto mapping routes not registered: {e}")
+
     @app.route('/healthz')
     def healthz():
         try:
