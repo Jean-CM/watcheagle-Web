@@ -1,14 +1,11 @@
 import csv
 import io
 import os
-from datetime import datetime
 
 from flask import request
 
-from layout import badge
 from routes_spotify_mapping import ensure_spotify_map_table, save_map
 from utils import safe_int
-
 
 CATALOG_PATH = os.path.join(os.path.dirname(__file__), 'data', 'trap_mood_vibes.csv')
 
@@ -121,11 +118,7 @@ def import_catalog_rows(cur, rows, source_file='upload'):
                 source_file=EXCLUDED.source_file,
                 updated_at=NOW()
         ''', (
-            track_name,
-            artist_name,
-            track_id,
-            spotify_uri,
-            isrc,
+            track_name, artist_name, track_id, spotify_uri, isrc,
             pick(row, 'Álbum', 'Album'),
             pick(row, 'Fecha Del Álbum', 'Fecha del álbum', 'Album Date'),
             pick(row, 'Sello', 'Label'),
@@ -168,6 +161,7 @@ def parse_csv_text(text):
 
 def catalog_summary(cur):
     ensure_spotify_catalog_table(cur)
+    ensure_spotify_map_table(cur)
     cur.execute('SELECT COUNT(*) total FROM spotify_catalog')
     total = safe_int(cur.fetchone()['total'])
     cur.execute('SELECT COUNT(DISTINCT artist_name) total FROM spotify_catalog')
@@ -198,7 +192,6 @@ def register_spotify_catalog_routes(app, get_conn, base_page):
                     <button class="btn btn-primary" style="margin-top:14px;">Subir e importar</button>
                 </form>
                 <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
-                    <a class="btn btn-secondary" href="/spotify/catalog-import-bundled">Importar CSV incluido</a>
                     <a class="btn btn-secondary" href="/spotify/create-playlist-mapped?strategy=under900&limit=50">Crear playlist con catálogo</a>
                 </div>
             </div>
@@ -209,6 +202,9 @@ def register_spotify_catalog_routes(app, get_conn, base_page):
             </div>
             '''
             return base_page('Catálogo Spotify', 'spotify', body).replace('__LOAD_TIME__','0.00s').replace('__CACHE_STATUS__','No cache')
+        except Exception as e:
+            body = f'<div class="card"><div class="section-title">Error catálogo Spotify</div><pre style="white-space:pre-wrap">{str(e)}</pre></div>'
+            return base_page('Error Catálogo Spotify', 'spotify', body).replace('__LOAD_TIME__','0.00s').replace('__CACHE_STATUS__','No cache'), 500
         finally:
             cur.close()
             conn.close()
@@ -228,26 +224,8 @@ def register_spotify_catalog_routes(app, get_conn, base_page):
             return catalog_result_page(base_page, result)
         except Exception as e:
             conn.rollback()
-            return f'<pre>Error importando catálogo: {str(e)}</pre>', 500
-        finally:
-            cur.close()
-            conn.close()
-
-    @app.route('/spotify/catalog-import-bundled')
-    def spotify_catalog_import_bundled():
-        if not os.path.exists(CATALOG_PATH):
-            return f'<pre>No existe archivo incluido: {CATALOG_PATH}</pre>', 404
-        with open(CATALOG_PATH, 'r', encoding='utf-8-sig') as f:
-            rows = parse_csv_text(f.read())
-        conn = get_conn()
-        cur = conn.cursor()
-        try:
-            result = import_catalog_rows(cur, rows, 'trap_mood_vibes.csv')
-            conn.commit()
-            return catalog_result_page(base_page, result)
-        except Exception as e:
-            conn.rollback()
-            return f'<pre>Error importando catálogo incluido: {str(e)}</pre>', 500
+            body = f'<div class="card"><div class="section-title">Error importando catálogo</div><pre style="white-space:pre-wrap">{str(e)}</pre></div>'
+            return base_page('Error importando catálogo', 'spotify', body).replace('__LOAD_TIME__','0.00s').replace('__CACHE_STATUS__','No cache'), 500
         finally:
             cur.close()
             conn.close()
