@@ -15,6 +15,20 @@ def norm(v):
     return (v or '').strip().lower()
 
 
+def parse_spotify_uri(value):
+    v = (value or '').strip()
+    if not v:
+        return ''
+    if v.startswith('spotify:track:'):
+        return v.split('?')[0]
+    if 'open.spotify.com/track/' in v:
+        track_id = v.split('/track/', 1)[1].split('?', 1)[0].split('/', 1)[0]
+        return f'spotify:track:{track_id}' if track_id else ''
+    if len(v) >= 20 and '/' not in v and ':' not in v:
+        return f'spotify:track:{v}'
+    return v
+
+
 def ensure_spotify_map_table(cur):
     cur.execute('''
         CREATE TABLE IF NOT EXISTS spotify_track_map (
@@ -77,6 +91,9 @@ def get_mapped_uri(cur, artist, track):
 
 
 def save_map(cur, artist, track, uri, title=None, sp_artist=None, source='auto'):
+    uri = parse_spotify_uri(uri)
+    if not uri.startswith('spotify:track:'):
+        raise Exception('URI inválido. Usa un link de canción de Spotify o spotify:track:ID.')
     ensure_spotify_map_table(cur)
     cur.execute('''
         INSERT INTO spotify_track_map (artist_name, track_name, spotify_uri, spotify_title, spotify_artist, source, updated_at)
@@ -172,6 +189,7 @@ def register_spotify_mapping_routes(app, get_conn, base_page):
                 mapped = get_mapped_uri(cur, artist, track)
                 found = None if mapped else search_spotify_track(tok, artist, track, limit=3)
                 manual_url = f'https://open.spotify.com/search/{quote_plus(artist + " " + track)}'
+                manual_form = f'/spotify/manual-map?artist={quote_plus(artist)}&track={quote_plus(track)}'
 
                 if mapped:
                     status = badge('OK')
@@ -184,7 +202,7 @@ def register_spotify_mapping_routes(app, get_conn, base_page):
                 else:
                     status = badge('WARN')
                     result = 'SIN RESULTADO'
-                    action = f'<a class="btn btn-secondary" href="{manual_url}" target="_blank">Buscar manual</a>'
+                    action = f'<a class="btn btn-secondary" href="{manual_url}" target="_blank">Buscar</a> <a class="btn btn-primary" href="{manual_form}">Mapear</a>'
 
                 trs += f'''
                 <tr>
@@ -205,6 +223,7 @@ def register_spotify_mapping_routes(app, get_conn, base_page):
                 <div class="section-title">Diagnóstico búsqueda Spotify</div>
                 <div class="mini-row"><span>Estrategia</span><strong>{strategy}</strong></div>
                 <div class="mini-row"><span>Límite</span><strong>{limit}</strong></div>
+                <div class="mini-row"><span>Uso</span><strong>Si sale SIN RESULTADO, pulsa Buscar, copia el link de la canción y luego Mapear.</strong></div>
                 <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
                     <a class="btn btn-primary" href="/spotify/create-playlist-mapped?strategy={strategy}&limit={limit}">Crear playlist con mapeo</a>
                     <a class="btn btn-secondary" href="/?view=spotify">Volver</a>
@@ -222,6 +241,27 @@ def register_spotify_mapping_routes(app, get_conn, base_page):
             cur.close()
             conn.close()
 
+    @app.route('/spotify/manual-map')
+    def spotify_manual_map():
+        artist = request.args.get('artist') or ''
+        track = request.args.get('track') or ''
+        search_url = f'https://open.spotify.com/search/{quote_plus(artist + " " + track)}'
+        body = f'''
+        <div class="card">
+            <div class="section-title">Mapeo manual Spotify</div>
+            <div class="mini-row"><span>Artista DB</span><strong>{artist}</strong></div>
+            <div class="mini-row"><span>Canción DB</span><strong>{track}</strong></div>
+            <div style="margin:14px 0;"><a class="btn btn-secondary" href="{search_url}" target="_blank">Buscar en Spotify</a></div>
+            <form method="GET" action="/spotify/save-map" class="form-grid">
+                <input type="hidden" name="artist" value="{artist}">
+                <input type="hidden" name="track" value="{track}">
+                <div class="field" style="grid-column:1 / -1;"><label>Link o URI de Spotify</label><input name="uri" placeholder="https://open.spotify.com/track/..." required></div>
+                <button class="btn btn-primary">Guardar URI manual</button>
+            </form>
+        </div>
+        '''
+        return base_page('Mapeo manual Spotify', 'spotify', body).replace('__LOAD_TIME__','0.00s').replace('__CACHE_STATUS__','No cache')
+
     @app.route('/spotify/save-map')
     def spotify_save_map():
         conn = get_conn()
@@ -236,7 +276,12 @@ def register_spotify_mapping_routes(app, get_conn, base_page):
                 return '<pre>Faltan artist, track o uri.</pre>', 400
             save_map(cur, artist, track, uri, title, sp_artist, 'manual')
             conn.commit()
-            return '<script>history.back()</script><p>URI guardado. Puedes volver atrás.</p>'
+            body = f'<div class="card"><div class="section-title">URI guardado</div><div class="mini-row"><span>Artista</span><strong>{artist}</strong></div><div class="mini-row"><span>Canción</span><strong>{track}</strong></div><div style="margin-top:14px;"><a class="btn btn-primary" href="/spotify/debug-search?strategy=under900&limit=10">Volver al diagnóstico</a></div></div>'
+            return base_page('URI guardado', 'spotify', body).replace('__LOAD_TIME__','0.00s').replace('__CACHE_STATUS__','No cache')
+        except Exception as e:
+            conn.rollback()
+            body = f'<div class="card"><div class="section-title">Error guardando URI</div><pre>{str(e)}</pre><a class="btn btn-primary" href="/?view=spotify">Volver</a></div>'
+            return base_page('Error guardando URI', 'spotify', body).replace('__LOAD_TIME__','0.00s').replace('__CACHE_STATUS__','No cache'), 500
         finally:
             cur.close()
             conn.close()
