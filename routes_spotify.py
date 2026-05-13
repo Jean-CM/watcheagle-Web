@@ -2,12 +2,12 @@ import base64, random, requests
 from datetime import datetime
 from urllib.parse import urlencode
 from flask import request, redirect
-from config import SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REDIRECT_URI, SPOTIFY_PLAYLIST_PRIVATE, SPOTIFY_RANDOM_TARGET_HOURS, MONITOR_PLAYS_ARTISTS
+from config import SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, SPOTIFY_REDIRECT_URI, SPOTIFY_RANDOM_TARGET_HOURS, MONITOR_PLAYS_ARTISTS
 from layout import badge
 from utils import safe_int
 
 AUTH_URL='https://accounts.spotify.com/authorize'; TOKEN_URL='https://accounts.spotify.com/api/token'; API='https://api.spotify.com/v1'
-SCOPES='playlist-modify-public playlist-modify-private user-read-email user-read-private'
+SCOPES='playlist-modify-private user-read-email user-read-private'
 PLAYLIST_NAMES={
  'under600':['Subiendo el Nivel','Modo Repetición','La Ruta al Hit','Impulso Urbano','Sonido en Crecimiento','Dale Play Sin Miedo'],
  'under900':['Camino al Mil','Empuje Final','La Vuelta Sigue','Rumbo al Top','Playlist de Empuje','Sigue Sonando'],
@@ -52,7 +52,8 @@ def search_uri(tok, artist, track):
     return None
 
 def candidates(cur, strategy):
-    artists=[a.strip().lower() for a in MONITOR_PLAYS_ARTISTS if a.strip()]; ph=','.join(['%s']*len(artists)); base=f'LOWER(s.artist_name) IN ({ph})'
+    artists=[a.strip().lower() for a in MONITOR_PLAYS_ARTISTS if a.strip()]
+    ph=','.join(['%s']*len(artists)); base=f'LOWER(s.artist_name) IN ({ph})'
     having='COUNT(*) < 1000'; order='COUNT(*) ASC'
     if strategy=='under600': having='COUNT(*) < 600'
     elif strategy=='under900': having='COUNT(*) < 900'
@@ -62,6 +63,17 @@ def candidates(cur, strategy):
     rows=cur.fetchall()
     if strategy=='random8h': random.shuffle(rows); rows=rows[:120]
     return rows
+
+def add_tracks(tok, playlist_id, uris):
+    added=0
+    for i in range(0,len(uris),100):
+        chunk=uris[i:i+100]
+        rr=requests.post(f'{API}/playlists/{playlist_id}/tracks',headers=headers(tok),json={'uris':chunk},timeout=30)
+        if rr.status_code==403 and i==0:
+            rr=requests.put(f'{API}/playlists/{playlist_id}/tracks',headers=headers(tok),json={'uris':chunk},timeout=30)
+        if rr.status_code>=400: raise Exception(f'Error agregando tracks: {rr.status_code} {rr.text[:250]}')
+        added+=len(chunk)
+    return added
 
 def create_playlist(cur, strategy):
     tok=token(cur); rows=candidates(cur,strategy)
@@ -75,13 +87,9 @@ def create_playlist(cur, strategy):
         else: nf.append(x)
     if not uris: raise Exception(f'Spotify no encontró canciones agregables para {strategy}. No creé playlist vacía.')
     name=playlist_name(strategy)
-    r=requests.post(f'{API}/me/playlists',headers=headers(tok),json={'name':name,'description':playlist_desc(strategy),'public':not SPOTIFY_PLAYLIST_PRIVATE},timeout=20)
+    r=requests.post(f'{API}/me/playlists',headers=headers(tok),json={'name':name,'description':playlist_desc(strategy),'public':False},timeout=20)
     if r.status_code>=400: raise Exception(f'Error creando playlist: {r.status_code} {r.text[:300]}')
-    playlist=r.json(); added=0
-    for i in range(0,len(uris),100):
-        chunk=uris[i:i+100]; rr=requests.post(f'{API}/playlists/{playlist["id"]}/tracks',headers=headers(tok),json={'uris':chunk},timeout=30)
-        if rr.status_code>=400: raise Exception(f'Error agregando tracks: {rr.status_code} {rr.text[:250]}')
-        added+=len(chunk)
+    playlist=r.json(); added=add_tracks(tok,playlist['id'],uris)
     url=playlist.get('external_urls',{}).get('spotify','')
     cur.execute('INSERT INTO spotify_playlist_runs (playlist_name,playlist_url,strategy,tracks_found,tracks_added,tracks_not_found) VALUES (%s,%s,%s,%s,%s,%s)',(name,url,strategy,len(uris),added,len(nf)))
     return {'name':name,'url':url,'candidates':len(rows),'found':len(uris),'added':added,'not_found':nf[:40]}
@@ -89,7 +97,7 @@ def create_playlist(cur, strategy):
 def render_spotify(cur):
     ensure_tables(cur); cur.execute('SELECT * FROM spotify_tokens WHERE id=1'); row=cur.fetchone(); cur.execute('SELECT playlist_name,playlist_url,strategy,tracks_added,tracks_not_found,created_at FROM spotify_playlist_runs ORDER BY created_at DESC LIMIT 12'); runs=cur.fetchall()
     run_rows=''.join([f'<tr><td>{r["created_at"]}</td><td>{r["strategy"]}</td><td>{r["playlist_name"]}</td><td>{safe_int(r["tracks_added"])}</td><td>{safe_int(r["tracks_not_found"])}</td><td><a class="btn btn-secondary" href="{r["playlist_url"]}" target="_blank">Abrir</a></td></tr>' for r in runs]) or '<tr><td colspan="6" class="muted">Sin playlists creadas.</td></tr>'
-    return f'''<div class="grid"><div class="card"><div class="label">Config Spotify</div><div class="value">{badge('OK' if configured() else 'INCIDENT')}</div></div><div class="card"><div class="label">Autorización</div><div class="value">{badge('OK' if row else 'PENDING')}</div></div><div class="card"><div class="label">Modo</div><div class="value blue">{'Privada' if SPOTIFY_PLAYLIST_PRIVATE else 'Pública'}</div></div><div class="card"><div class="label">Random</div><div class="value green">{SPOTIFY_RANDOM_TARGET_HOURS}H</div></div></div><div class="card" style="margin-bottom:18px;"><div class="section-title">Spotify Automation</div><div class="mini-row"><span>Nombres</span><strong>Dinámicos, llamativos y sin marca técnica</strong></div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;"><a class="btn btn-primary" href="/spotify/reset-auth">Reset + Autorizar Spotify</a><a class="btn btn-secondary" href="/spotify/me">Probar usuario Spotify</a><a class="btn btn-secondary" href="/?view=playlist-builder">Playlist Builder</a></div></div><div class="card" style="margin-bottom:18px;"><div class="section-title">Crear playlists</div><div style="display:flex;gap:10px;flex-wrap:wrap;"><a class="btn btn-primary" href="/spotify/create-playlist?strategy=under600">Crear &lt;600</a><a class="btn btn-primary" href="/spotify/create-playlist?strategy=under900">Crear &lt;900</a><a class="btn btn-secondary" href="/spotify/create-playlist?strategy=near1k">Crear 900-999</a><a class="btn btn-secondary" href="/spotify/create-playlist?strategy=random8h">Crear random 8H</a></div></div><div class="card"><div class="section-title">Últimas playlists</div><table><thead><tr><th>Fecha</th><th>Estrategia</th><th>Playlist</th><th>Agregadas</th><th>No encontradas</th><th>Abrir</th></tr></thead><tbody>{run_rows}</tbody></table></div>'''
+    return f'''<div class="grid"><div class="card"><div class="label">Config Spotify</div><div class="value">{badge('OK' if configured() else 'INCIDENT')}</div></div><div class="card"><div class="label">Autorización</div><div class="value">{badge('OK' if row else 'PENDING')}</div></div><div class="card"><div class="label">Modo</div><div class="value blue">Privada forzada</div></div><div class="card"><div class="label">Random</div><div class="value green">{SPOTIFY_RANDOM_TARGET_HOURS}H</div></div></div><div class="card" style="margin-bottom:18px;"><div class="section-title">Spotify Automation</div><div class="mini-row"><span>Nombres</span><strong>Dinámicos, llamativos y sin marca técnica</strong></div><div class="mini-row"><span>Permisos</span><strong>{SCOPES}</strong></div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;"><a class="btn btn-primary" href="/spotify/reset-auth">Reset + Autorizar Spotify</a><a class="btn btn-secondary" href="/spotify/me">Probar usuario Spotify</a><a class="btn btn-secondary" href="/?view=playlist-builder">Playlist Builder</a></div></div><div class="card" style="margin-bottom:18px;"><div class="section-title">Crear playlists</div><div style="display:flex;gap:10px;flex-wrap:wrap;"><a class="btn btn-primary" href="/spotify/create-playlist?strategy=under600">Crear &lt;600</a><a class="btn btn-primary" href="/spotify/create-playlist?strategy=under900">Crear &lt;900</a><a class="btn btn-secondary" href="/spotify/create-playlist?strategy=near1k">Crear 900-999</a><a class="btn btn-secondary" href="/spotify/create-playlist?strategy=random8h">Crear random 8H</a></div></div><div class="card"><div class="section-title">Últimas playlists</div><table><thead><tr><th>Fecha</th><th>Estrategia</th><th>Playlist</th><th>Agregadas</th><th>No encontradas</th><th>Abrir</th></tr></thead><tbody>{run_rows}</tbody></table></div>'''
 
 def register_spotify_routes(app, get_conn, base_page):
     @app.route('/spotify/login')
