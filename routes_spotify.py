@@ -138,8 +138,7 @@ def register_spotify_routes(app, get_conn, base_page):
             return '<pre>Faltan variables SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET o SPOTIFY_REDIRECT_URI.</pre>', 400
         return redirect(AUTH_URL + '?' + urlencode({'client_id': SPOTIFY_CLIENT_ID, 'response_type': 'code', 'redirect_uri': SPOTIFY_REDIRECT_URI, 'scope': SCOPES, 'show_dialog': 'true'}))
 
-    @app.route('/spotify/callback')
-    def spotify_callback():
+    def handle_spotify_callback():
         code = request.args.get('code')
         if not code:
             return '<pre>Spotify callback sin code.</pre>', 400
@@ -152,6 +151,18 @@ def register_spotify_routes(app, get_conn, base_page):
         finally:
             cur.close(); conn.close()
         return redirect('/?view=spotify')
+
+    @app.route('/spotify/callback')
+    def spotify_callback():
+        return handle_spotify_callback()
+
+    @app.route('/callback')
+    def spotify_callback_root():
+        return handle_spotify_callback()
+
+    @app.route('/spotify-callback')
+    def spotify_callback_alt():
+        return handle_spotify_callback()
 
     @app.route('/spotify/create-playlist')
     def spotify_create_playlist():
