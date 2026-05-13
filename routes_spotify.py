@@ -98,13 +98,17 @@ def candidates(cur, strategy):
 def create_playlist(cur, strategy):
     tok = token(cur)
     profile = me(tok)
-    user = profile['id']
+    user = profile.get('id')
     title, rows = candidates(cur, strategy)
     name = f'{title} | {datetime.utcnow().strftime("%Y-%m-%d")}'
     payload = {'name': name, 'description': 'Creada por WatchEagle.', 'public': not SPOTIFY_PLAYLIST_PRIVATE}
-    r = requests.post(f'{API}/users/{user}/playlists', headers=headers(tok), json=payload, timeout=20)
+
+    # Endpoint recomendado para crear playlist del usuario autenticado.
+    # Evita problemas de mismatch con /users/{user_id}/playlists.
+    r = requests.post(f'{API}/me/playlists', headers=headers(tok), json=payload, timeout=20)
     if r.status_code >= 400:
-        raise Exception(f'Error creando playlist: {r.status_code} {r.text[:350]} | user={user} | product={profile.get("product")} | country={profile.get("country")}')
+        raise Exception(f'Error creando playlist: {r.status_code} {r.text[:350]} | endpoint=/me/playlists | user={user} | product={profile.get("product")} | country={profile.get("country")}')
+
     playlist = r.json()
     uris, nf = [], []
     for x in rows:
