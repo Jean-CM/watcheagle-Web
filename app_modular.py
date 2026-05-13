@@ -21,6 +21,7 @@ from routes_operations import render_operaciones
 from routes_alerts import render_alertas
 from routes_system import render_sistema
 from routes_playlist import render_playlist_builder, export_playlist_builder_csv
+from routes_spotify import render_spotify, register_spotify_routes
 from routes_history import render_historico, register_history_routes
 from routes_jobs import register_job_routes
 from routes_teams import register_team_routes
@@ -44,7 +45,7 @@ def cache_key_for_request(view):
 
 
 def is_cacheable(view):
-    return view in {"ejecutivo", "operaciones", "alertas", "sistema", "playlist-builder", "analisis", "ganancias", "monitor-plays"}
+    return view in {"ejecutivo", "operaciones", "alertas", "sistema", "spotify", "playlist-builder", "analisis", "ganancias", "monitor-plays"}
 
 
 def render_with_db(view):
@@ -60,6 +61,8 @@ def render_with_db(view):
             return "Alertas internas", render_alertas(cur), view
         if view == "sistema":
             return "Salud técnica del sistema", render_sistema(cur), view
+        if view == "spotify":
+            return "Spotify Automation", render_spotify(cur), view
         if view == "playlist-builder":
             return "Playlist Builder", render_playlist_builder(cur), view
         if view == "monitor":
@@ -330,6 +333,7 @@ register_job_routes(app)
 register_team_routes(app)
 register_init_routes(app)
 register_history_routes(app)
+register_spotify_routes(app, get_conn, base_page)
 
 
 if __name__ == "__main__":
