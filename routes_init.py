@@ -5,6 +5,15 @@ from config import ARTIST_METADATA
 
 def register_init_routes(app):
 
+    # Registra rutas extra de Spotify Mapping sin tocar app_modular.py.
+    # Se hace aquí porque routes_init ya se carga siempre en el arranque.
+    try:
+        from layout import base_page
+        from routes_spotify_mapping import register_spotify_mapping_routes
+        register_spotify_mapping_routes(app, get_conn, base_page)
+    except Exception as e:
+        print(f"[WARN] spotify mapping routes not registered: {e}")
+
     @app.route('/healthz')
     def healthz():
         try:
