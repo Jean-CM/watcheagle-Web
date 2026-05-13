@@ -76,6 +76,7 @@ def base_page(title, view, body):
         + nav_link("Operaciones", "operaciones", view)
         + nav_link("Alertas", "alertas", view)
         + nav_link("Sistema", "sistema", view)
+        + nav_link("Spotify", "spotify", view)
         + nav_link("Playlist Builder", "playlist-builder", view)
         + nav_link("Monitor", "monitor", view)
         + nav_link("Histórico Last.fm", "historico", view)
