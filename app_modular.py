@@ -20,6 +20,7 @@ from routes_executive import render_ejecutivo_fast
 from routes_operations import render_operaciones
 from routes_alerts import render_alertas
 from routes_system import render_sistema
+from routes_playlist import render_playlist_builder, export_playlist_builder_csv
 from routes_history import render_historico, register_history_routes
 from routes_jobs import register_job_routes
 from routes_teams import register_team_routes
@@ -43,7 +44,7 @@ def cache_key_for_request(view):
 
 
 def is_cacheable(view):
-    return view in {"ejecutivo", "operaciones", "alertas", "sistema", "analisis", "ganancias", "monitor-plays"}
+    return view in {"ejecutivo", "operaciones", "alertas", "sistema", "playlist-builder", "analisis", "ganancias", "monitor-plays"}
 
 
 def render_with_db(view):
@@ -59,6 +60,8 @@ def render_with_db(view):
             return "Alertas internas", render_alertas(cur), view
         if view == "sistema":
             return "Salud técnica del sistema", render_sistema(cur), view
+        if view == "playlist-builder":
+            return "Playlist Builder", render_playlist_builder(cur), view
         if view == "monitor":
             return "Monitoreo operativo", render_monitor(cur), view
         if view == "historico":
@@ -104,6 +107,23 @@ def home():
 
     except Exception as e:
         return f"<pre>ERROR EN HOME:\n{str(e)}</pre>", 500
+
+
+@app.route("/export-playlist-builder.csv")
+def export_playlist_builder_route():
+    conn = None
+    cur = None
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+        return export_playlist_builder_csv(cur)
+    except Exception as e:
+        return f"<pre>ERROR EXPORTANDO PLAYLIST BUILDER:\n{str(e)}</pre>", 500
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
 
 
 @app.route("/export-monitor-plays.csv")
