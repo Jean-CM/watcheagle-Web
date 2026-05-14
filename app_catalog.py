@@ -7,9 +7,11 @@ from routes_spotify_catalog import register_spotify_catalog_routes
 from routes_spotify_catalog_strict import register_spotify_catalog_strict_routes
 from routes_spotify_control import register_spotify_control_routes
 from routes_spotify_home_control import render_spotify_v2
+from routes_spotify_monthly import register_spotify_monthly_routes
 
 app_modular.render_spotify = render_spotify_v2
 
 register_spotify_catalog_routes(app, get_conn, base_page)
 register_spotify_catalog_strict_routes(app, get_conn, base_page)
 register_spotify_control_routes(app, get_conn, base_page)
+register_spotify_monthly_routes(app, get_conn, base_page)
