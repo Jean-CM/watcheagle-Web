@@ -3,10 +3,11 @@ import requests
 from flask import request
 
 from routes_spotify import token, headers, playlist_name, playlist_desc
-from routes_spotify_control import pick, metrics, ensure_control, tr_art
+from routes_spotify_control import pick, metrics, ensure_control, tr_art, dm
 from utils import safe_int
 
 API='https://api.spotify.com/v1'
+TARGET_MINUTES=480
 
 
 def add_bulk(tok,pid,items):
@@ -25,6 +26,34 @@ def add_bulk(tok,pid,items):
     return ok,bad
 
 
+def total_minutes(items):
+    return round(sum(float(x.get('duration') or 0) for x in items),2)
+
+
+def top_up_to_8h(cur,items):
+    seen=set([x.get('uri') for x in items if x.get('uri')])
+    mins=total_minutes(items)
+    cur.execute('''
+        SELECT artist_name, track_name, spotify_uri, duration, bpm, popularity, energy
+        FROM spotify_catalog
+        WHERE spotify_uri IS NOT NULL AND spotify_uri <> ''
+        ORDER BY RANDOM()
+        LIMIT 800
+    ''')
+    added=[]
+    for r in cur.fetchall():
+        if mins >= TARGET_MINUTES:
+            break
+        uri=r.get('spotify_uri')
+        if not uri or uri in seen:
+            continue
+        seen.add(uri)
+        d=dm(r.get('duration'))
+        x={'artist_name':r.get('artist_name'),'track_name':r.get('track_name'),'spotify_artist':r.get('artist_name'),'spotify_title':r.get('track_name'),'uri':uri,'duration':d,'bpm':safe_int(r.get('bpm')),'popularity':safe_int(r.get('popularity')),'energy':safe_int(r.get('energy')),'topup':True}
+        items.append(x); added.append(x); mins+=d
+    return added, round(mins,2)
+
+
 def save_run(cur,name,url,strategy,ok,missing,bad,m,devices):
     ensure_control(cur)
     cur.execute('INSERT INTO spotify_playlist_control (playlist_name,playlist_url,strategy,tracks_added,duration_minutes,artists_count,avg_bpm,avg_popularity,avg_energy,devices_count,estimated_daily,estimated_monthly) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',(name,url,strategy,len(ok),m['dur'],m['arts'],m['bpm'],m['pop'],m['en'],devices,m['daily'],m['monthly']))
@@ -33,9 +62,11 @@ def save_run(cur,name,url,strategy,ok,missing,bad,m,devices):
 
 
 def make_one(cur,tok,strategy,label,devices):
-    items,missing=pick(cur,strategy,300,8)
+    items,missing=pick(cur,strategy,500,8)
     if not items:
         return {'ok':False,'label':label,'error':'Sin canciones exactas en catálogo','strategy':strategy}
+    original_minutes=total_minutes(items)
+    topup,final_minutes=top_up_to_8h(cur,items)
     name=f'{label} · {playlist_name(strategy)} · 8H'
     r=requests.post(f'{API}/me/playlists',headers=headers(tok),json={'name':name,'description':playlist_desc(strategy),'public':False},timeout=30)
     if r.status_code>=400:
@@ -45,7 +76,7 @@ def make_one(cur,tok,strategy,label,devices):
     m=metrics(ok,devices)
     url=pl.get('external_urls',{}).get('spotify','')
     save_run(cur,name,url,'monthly_'+strategy,ok,missing,bad,m,devices)
-    return {'ok':True,'label':label,'name':name,'url':url,'added':len(ok),'missing':len(missing)+len(bad),'metrics':m,'artists':tr_art(ok)}
+    return {'ok':True,'label':label,'name':name,'url':url,'added':len(ok),'missing':len(missing)+len(bad),'metrics':m,'artists':tr_art(ok),'topup':len(topup),'original_minutes':original_minutes,'final_minutes':final_minutes,'reached':final_minutes>=TARGET_MINUTES}
 
 
 def register_spotify_monthly_routes(app,get_conn,base_page):
@@ -65,11 +96,12 @@ def register_spotify_monthly_routes(app,get_conn,base_page):
             for r in results:
                 if r.get('ok'):
                     m=r['metrics']; total_daily+=m['daily']; total_month+=m['monthly']
-                    rows+=f'<tr><td>{r["label"]}</td><td>{r["name"]}</td><td>{r["added"]}</td><td>{m["dur"]:.1f} min</td><td>{int(m["daily"]):,}</td><td>{int(m["monthly"]):,}</td><td>{r["missing"]}</td><td><a class="btn btn-secondary" target="_blank" href="{r["url"]}">Abrir</a></td></tr>'
-                    detail+=f'<div class="card"><div class="section-title">{r["label"]}: cantidad por artista</div><table><tbody>{r["artists"]}</tbody></table></div>'
+                    status='OK 8H' if r.get('reached') else 'CORTA'
+                    rows+=f'<tr><td>{r["label"]}</td><td>{r["name"]}</td><td>{r["added"]}</td><td>{m["dur"]:.1f} min</td><td>{status}</td><td>{r["topup"]}</td><td>{int(m["daily"]):,}</td><td>{int(m["monthly"]):,}</td><td>{r["missing"]}</td><td><a class="btn btn-secondary" target="_blank" href="{r["url"]}">Abrir</a></td></tr>'
+                    detail+=f'<div class="card"><div class="section-title">{r["label"]}: cantidad por artista</div><div class="mini-row"><span>Duración inicial estrategia</span><strong>{r["original_minutes"]:.1f} min</strong></div><div class="mini-row"><span>Relleno desde catálogo</span><strong>{r["topup"]} canciones</strong></div><table><tbody>{r["artists"]}</tbody></table></div>'
                 else:
-                    rows+=f'<tr><td>{r.get("label")}</td><td colspan="6">ERROR: {r.get("error")}</td><td></td></tr>'
-            body=f'''<div class="card" style="margin-bottom:18px;"><div class="section-title">Paquete mensual 8H creado</div><div class="mini-row"><span>Equipos 24/7</span><strong>{devices}</strong></div><div class="mini-row"><span>Estimado total/día</span><strong class="green">{int(total_daily):,}</strong></div><div class="mini-row"><span>Estimado total/mes</span><strong class="blue">{int(total_month):,}</strong></div><div style="margin-top:14px"><a class="btn btn-primary" href="/spotify/control">Volver al control</a></div></div><div class="card"><div class="section-title">Playlists generadas</div><table><thead><tr><th>Tipo</th><th>Playlist</th><th>Canciones</th><th>Duración</th><th>Est. día</th><th>Est. mes</th><th>No agregadas</th><th>Abrir</th></tr></thead><tbody>{rows}</tbody></table></div>{detail}'''
+                    rows+=f'<tr><td>{r.get("label")}</td><td colspan="8">ERROR: {r.get("error")}</td><td></td></tr>'
+            body=f'''<div class="card" style="margin-bottom:18px;"><div class="section-title">Paquete mensual 8H creado</div><div class="mini-row"><span>Equipos 24/7</span><strong>{devices}</strong></div><div class="mini-row"><span>Estimado total/día</span><strong class="green">{int(total_daily):,}</strong></div><div class="mini-row"><span>Estimado total/mes</span><strong class="blue">{int(total_month):,}</strong></div><div class="mini-row"><span>Regla</span><strong>Si una estrategia no llega a 8H, se rellena con catálogo estricto.</strong></div><div style="margin-top:14px"><a class="btn btn-primary" href="/spotify/control">Volver al control</a></div></div><div class="card"><div class="section-title">Playlists generadas</div><table><thead><tr><th>Tipo</th><th>Playlist</th><th>Canciones</th><th>Duración</th><th>Estado</th><th>Relleno</th><th>Est. día</th><th>Est. mes</th><th>No agregadas</th><th>Abrir</th></tr></thead><tbody>{rows}</tbody></table></div>{detail}'''
             return base_page('Paquete mensual Spotify','spotify',body).replace('__LOAD_TIME__','0.00s').replace('__CACHE_STATUS__','No cache')
         except Exception as e:
             if conn: conn.rollback()
