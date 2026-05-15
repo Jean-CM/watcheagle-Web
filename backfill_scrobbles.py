@@ -40,6 +40,42 @@ def filter_teams_by_env(teams):
     return [t for t in teams if int(t["id"]) in ids]
 
 
+def lastfm_attr(data):
+    return data.get("recenttracks", {}).get("@attr", {}) if isinstance(data, dict) else {}
+
+
+def safe_int_local(value, default=0):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def get_total_pages_from_payload(data):
+    attr = lastfm_attr(data)
+    return safe_int_local(attr.get("totalPages"), 0)
+
+
+def get_total_scrobbles_from_payload(data):
+    attr = lastfm_attr(data)
+    return safe_int_local(attr.get("total"), 0)
+
+
+def should_stop_by_page_cap(page, total_pages):
+    """
+    Regla nueva:
+    - Si Last.fm informa totalPages, collect-all llega hasta ese total real.
+    - BACKFILL_MAX_PAGES queda como límite de seguridad SOLO si FORCE_BACKFILL_PAGE_CAP=true.
+    - Esto evita que un equipo con 80 páginas se quede cortado en 50.
+    """
+    force_cap = os.environ.get("FORCE_BACKFILL_PAGE_CAP", "false").strip().lower() in {"1", "true", "yes", "y"}
+    if force_cap and BACKFILL_MAX_PAGES > 0 and page >= BACKFILL_MAX_PAGES:
+        return True, f"[STOP] Límite de seguridad FORCE_BACKFILL_PAGE_CAP alcanzado: {BACKFILL_MAX_PAGES} páginas"
+    if total_pages > 0 and page >= total_pages:
+        return True, f"[STOP] Fin real Last.fm alcanzado: página {page}/{total_pages}"
+    return False, ""
+
+
 def main():
     init_db()
     job_id = start_job(JOB_NAME, "Backfill histórico completo iniciado")
@@ -57,8 +93,9 @@ def main():
     log(f"Equipos seleccionados: {len(teams)}")
     log(f"Artistas permitidos: {len(ALLOWED_ARTISTS)}")
     log(f"BACKFILL_LIMIT: {BACKFILL_LIMIT}")
-    log(f"BACKFILL_MAX_PAGES: {BACKFILL_MAX_PAGES}")
-    log("Modo: FULL, no se detiene por duplicados")
+    log(f"BACKFILL_MAX_PAGES configurado: {BACKFILL_MAX_PAGES}")
+    log(f"FORCE_BACKFILL_PAGE_CAP: {os.environ.get('FORCE_BACKFILL_PAGE_CAP', 'false')}")
+    log("Modo: FULL dinámico, usa totalPages real de Last.fm")
     log("")
 
     for team_index, team in enumerate(teams, start=1):
@@ -67,13 +104,16 @@ def main():
         inserted_for_team = 0
         duplicates_for_team = 0
         skipped_for_team = 0
+        total_pages = 0
+        total_lastfm = 0
+        page = 1
 
         log("--------------------------------------------------")
         log(f"[START] {team_index}/{len(teams)} | {team_name} | {lastfm_user}")
 
         try:
-            for page in range(1, BACKFILL_MAX_PAGES + 1):
-                log(f"[PAGE] {team_name} | {lastfm_user} | página={page}")
+            while True:
+                log(f"[PAGE] {team_name} | {lastfm_user} | página={page}" + (f"/{total_pages}" if total_pages else ""))
 
                 data = fetch_recent_tracks(lastfm_user, limit=BACKFILL_LIMIT, page=page)
 
@@ -83,6 +123,13 @@ def main():
                     lines.append(msg)
                     errors += 1
                     break
+
+                if page == 1:
+                    total_pages = get_total_pages_from_payload(data)
+                    total_lastfm = get_total_scrobbles_from_payload(data)
+                    msg = f"[LASTFM META] {team_name} | {lastfm_user} | total_scrobbles={total_lastfm:,} | totalPages={total_pages:,} | limit={BACKFILL_LIMIT}"
+                    log(msg)
+                    lines.append(msg)
 
                 tracks = normalize_tracks_payload(data)
 
@@ -123,18 +170,34 @@ def main():
                         total_duplicates += 1
 
                 msg = (
-                    f"[OK PAGE] {team_name} | {lastfm_user} | página={page} | "
-                    f"insertados={page_inserted} | duplicados={page_duplicates} | "
+                    f"[OK PAGE] {team_name} | {lastfm_user} | página={page}" +
+                    (f"/{total_pages}" if total_pages else "") +
+                    f" | insertados={page_inserted} | duplicados={page_duplicates} | "
                     f"externos_omitidos={page_skipped_artists} | now_playing={page_now_playing} | sin_fecha={page_no_date}"
                 )
                 log(msg)
                 lines.append(msg)
 
-                if len(tracks) < BACKFILL_LIMIT:
-                    log(f"[STOP] {team_name} | fin del histórico disponible.")
+                stop, stop_msg = should_stop_by_page_cap(page, total_pages)
+                if stop:
+                    log(stop_msg)
+                    lines.append(f"{team_name} | {lastfm_user} | {stop_msg}")
                     break
 
-            done = f"[DONE] {team_name} | {lastfm_user} | insertados={inserted_for_team} | duplicados={duplicates_for_team} | externos_omitidos={skipped_for_team}"
+                if len(tracks) < BACKFILL_LIMIT:
+                    msg = f"[STOP] {team_name} | fin del histórico disponible por página incompleta. tracks={len(tracks)} limit={BACKFILL_LIMIT}"
+                    log(msg)
+                    lines.append(msg)
+                    break
+
+                page += 1
+
+            done = (
+                f"[DONE] {team_name} | {lastfm_user} | pages_read={page}" +
+                (f"/{total_pages}" if total_pages else "") +
+                f" | lastfm_total={total_lastfm:,} | insertados={inserted_for_team} | "
+                f"duplicados={duplicates_for_team} | externos_omitidos={skipped_for_team}"
+            )
             log(done)
             lines.append(done)
 
