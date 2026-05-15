@@ -10,6 +10,8 @@ from routes_spotify_home_control import render_spotify_v2
 from routes_spotify_monthly import register_spotify_monthly_routes
 from routes_spotify_balanced import register_spotify_balanced_routes
 from routes_whatsapp_alerts import register_whatsapp_alert_routes
+from routes_lastfm_validator import register_lastfm_validator_routes
+from routes_whatsapp_auto import register_whatsapp_auto_routes
 
 app_modular.render_spotify = render_spotify_v2
 
@@ -19,3 +21,5 @@ register_spotify_control_routes(app, get_conn, base_page)
 register_spotify_monthly_routes(app, get_conn, base_page)
 register_spotify_balanced_routes(app, get_conn, base_page)
 register_whatsapp_alert_routes(app, get_conn, base_page)
+register_lastfm_validator_routes(app, get_conn, base_page)
+register_whatsapp_auto_routes(app, get_conn, base_page)
